@@ -1,0 +1,41 @@
+# Build outputs
+build/
+build-*/
+out/
+dist/
+pkg-*/
+CMakeUserPresets.json
+
+# Compiled artifacts
+*.a
+*.dll
+*.dylib
+*.exe
+*.o
+*.obj
+*.so
+
+# Models and generated weights
+models/
+*.gguf
+*.safetensors
+*.onnx
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local configuration and logs
+.env
+.env.*
+!.env.example
+*.log
+benchmark-raw/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
