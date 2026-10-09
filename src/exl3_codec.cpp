@@ -5,6 +5,7 @@
 #include <limits>
 #include <stdexcept>
 #include <vector>
+#include <array>
 
 namespace exl3 {
 
@@ -90,6 +91,13 @@ static uint32_t word32(const uint16_t * packed, size_t index) {
 
 void decode_tile(const uint16_t * packed, unsigned bits, Codebook codebook, uint16_t * row_major) {
     validate(bits, codebook);
+    static const auto tables = [] {
+        std::array<std::array<uint16_t, 65536>, 3> data{};
+        for (unsigned cb = 0; cb < 3; ++cb) for (unsigned state = 0; state < 65536; ++state) {
+            data[cb][state] = decode_codebook(uint16_t(state), static_cast<Codebook>(cb));
+        }
+        return data;
+    }();
     const unsigned words = bits * 8;
     for (unsigned position = 0; position < 256; ++position) {
         const unsigned start = (position + 257) * bits - 16;
@@ -102,7 +110,7 @@ void decode_tile(const uint16_t * packed, unsigned bits, Codebook codebook, uint
         const unsigned element = position % 8;
         const unsigned row = (lane % 4) * 2 + (element & 1) + ((element & 2) ? 8 : 0);
         const unsigned col = lane / 4 + ((element & 4) ? 8 : 0);
-        row_major[row * 16 + col] = decode_codebook(state, codebook);
+        row_major[row * 16 + col] = tables[static_cast<unsigned>(codebook)][state];
     }
 }
 

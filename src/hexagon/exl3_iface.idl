@@ -5,6 +5,9 @@ interface exl3_iface : remote_handle64 {
     AEEResult decode(in uint32 bits, in uint32 codebook, in uint32 k, in uint32 n,
                      in sequence<octet> packed, rout sequence<octet> output,
                      rout uint64 cycles);
+    AEEResult decode_hvx(in uint32 bits, in uint32 codebook, in uint32 k, in uint32 n,
+                        in sequence<octet> packed, rout sequence<octet> output,
+                        rout uint64 cycles);
     AEEResult matmul(in uint32 bits, in uint32 codebook, in uint32 k, in uint32 n, in uint32 batch,
                      in sequence<octet> packed, in sequence<octet> suh, in sequence<octet> svh,
                      in sequence<octet> input, rout sequence<octet> output, rout uint64 cycles);

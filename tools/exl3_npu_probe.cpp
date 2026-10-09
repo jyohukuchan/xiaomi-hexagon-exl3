@@ -39,6 +39,16 @@ int main() {
             std::cout << "bits=" << bits << " cb=" << cb << " status=" << status
                       << " mismatches=" << mismatches << " cycles=" << (status ? 0 : cycles)
                       << " rpc_us=" << elapsed << '\n';
+            if (bits == 4 || bits == 6 || bits == 8) {
+                status = exl3_iface_decode_hvx(handle, bits, cb, k, n,
+                    reinterpret_cast<const unsigned char *>(packed.data()), int(packed.size() * 2),
+                    reinterpret_cast<unsigned char *>(result.data()), int(result.size() * 2), &cycles);
+                mismatches = 0;
+                if (!status) for (size_t j = 0; j < expected.size(); ++j) mismatches += expected[j] != result[j];
+                ok = ok && !status && !mismatches;
+                std::cout << "hvx bits=" << bits << " cb=" << cb << " status=" << status << " mismatches=" << mismatches
+                          << " cycles=" << (status ? 0 : cycles) << '\n';
+            }
         }
         if (bits == 4 || bits == 6 || bits == 8) {
             std::vector<uint16_t> suh(k), svh(n), weight(k * n);

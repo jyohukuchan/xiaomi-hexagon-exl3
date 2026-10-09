@@ -1,0 +1,411 @@
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+index 224bdef..6053427 100644
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -430,7 +430,10 @@ extern "C" {
+         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
+         GGML_TYPE_Q1_0    = 41,
+         GGML_TYPE_Q2_0    = 42,
+-        GGML_TYPE_COUNT   = 43,
++        GGML_TYPE_EXL3_4  = 43,
++        GGML_TYPE_EXL3_6  = 44,
++        GGML_TYPE_EXL3_8  = 45,
++        GGML_TYPE_COUNT   = 46,
+     };
+ 
+     // [TAG_GGML_PREC]
+diff --git a/ggml/src/ggml-cpu/CMakeLists.txt b/ggml/src/ggml-cpu/CMakeLists.txt
+index 71f55b4..69ffa86 100644
+--- a/ggml/src/ggml-cpu/CMakeLists.txt
++++ b/ggml/src/ggml-cpu/CMakeLists.txt
+@@ -60,6 +60,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
+ 
+     target_compile_features(${GGML_CPU_NAME} PRIVATE c_std_11 cxx_std_17)
+     target_include_directories(${GGML_CPU_NAME} PRIVATE . ggml-cpu)
++    if(EXL3_ROOT)
++        target_sources(${GGML_CPU_NAME} PRIVATE ${EXL3_ROOT}/src/exl3-ggml.cpp ${EXL3_ROOT}/src/exl3_codec.cpp)
++        target_include_directories(${GGML_CPU_NAME} PRIVATE ${EXL3_ROOT}/include)
++    endif()
+ 
+     if (APPLE AND GGML_ACCELERATE)
+         find_library(ACCELERATE_FRAMEWORK Accelerate)
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
+index 7c274c0..94d838f 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -15,6 +15,7 @@
+ #include "ggml.h"
+ #include "common.h"
+ #include "tiled/tiled.h"
++#include "exl3-block.h"
+ 
+ #if defined(_MSC_VER) || defined(__MINGW32__)
+ #include <malloc.h> // using malloc.h with MSC/MINGW
+@@ -1260,6 +1261,10 @@ void ggml_compute_forward_mul_mat(
+     const struct ggml_tensor * src1 = dst->src[1];
+ 
+     const int32_t hint = ggml_get_op_params_i32(dst, 1);
++    if (exl3_type_bits(src0->type)) {
++        ggml_exl3_mul_mat(params, dst);
++        return;
++    }
+     if (hint == GGML_HINT_SRC0_IS_HADAMARD && !params->use_ref) {
+         ggml_compute_forward_fwht(params, dst);
+         return;
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.cpp b/ggml/src/ggml-cpu/ggml-cpu.cpp
+index 81ff5d7..4268d48 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.cpp
++++ b/ggml/src/ggml-cpu/ggml-cpu.cpp
+@@ -1,6 +1,7 @@
+ #include "ggml-backend.h"
+ #include "ggml-backend-impl.h"
+ #include "ggml-cpu.h"
++#include "exl3-block.h"
+ #include "repack.h"
+ #include "traits.h"
+ #include "ggml-impl.h"
+@@ -442,6 +443,9 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
+     switch (op->op) {
+         case GGML_OP_CPY:
+         case GGML_OP_SET_ROWS:
++            if (exl3_type_bits(op->type) || (src0 && exl3_type_bits(src0->type))) {
++                return op->op == GGML_OP_CPY && src0->type == op->type && ggml_is_contiguous(src0) && ggml_is_contiguous(op);
++            }
+             return
+                 op->type != GGML_TYPE_IQ3_XXS &&
+                 op->type != GGML_TYPE_IQ3_S   &&
+@@ -451,6 +455,10 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
+                 op->type != GGML_TYPE_IQ1_S   &&
+                 op->type != GGML_TYPE_IQ1_M; // missing type_traits.from_float
+         case GGML_OP_MUL_MAT:
++            if (exl3_type_bits(src0->type)) {
++                return src0->ne[0] % 128 == 0 && src0->ne[1] % 128 == 0 && src0->ne[2] == 1 && src0->ne[3] == 1 &&
++                    ggml_is_contiguous(src0) && (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
++            }
+             if (ggml_get_op_params_i32(op, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
+                 src0->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) {
+                 return src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16;
+@@ -459,6 +467,13 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
+             return src1->type == GGML_TYPE_F32 ||
+                    src1->type == ggml_get_type_traits_cpu(src0->type)->vec_dot_type ||
+                    (src1->type == GGML_TYPE_BF16 && ggml_get_type_traits_cpu(src0->type)->vec_dot_type == GGML_TYPE_F32);
++        case GGML_OP_MUL_MAT_ID:
++            return !exl3_type_bits(src0->type);
++        case GGML_OP_GET_ROWS:
++            if (exl3_type_bits(src0->type)) {
++                return src0->ne[0] % 128 == 0 && src0->ne[1] % 128 == 0 && src0->ne[2] == 1 && src0->ne[3] == 1 && src1->type == GGML_TYPE_I32;
++            }
++            return true;
+         case GGML_OP_SOFT_MAX_BACK: {
+             if (op->src[0]->type != GGML_TYPE_F32 || op->src[1]->type != GGML_TYPE_F32) {
+                 return false;
+diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
+index c7e7c47..26f7304 100644
+--- a/ggml/src/ggml-cpu/ops.cpp
++++ b/ggml/src/ggml-cpu/ops.cpp
+@@ -7,6 +7,7 @@
+ #include "ggml.h"
+ #include "unary-ops.h"
+ #include "vec.h"
++#include "exl3-block.h"
+ 
+ #include <algorithm>
+ #include <cfloat>
+@@ -5371,6 +5372,10 @@ static void ggml_compute_forward_get_rows_f32(
+ void ggml_compute_forward_get_rows(
+         const ggml_compute_params * params,
+         ggml_tensor * dst) {
++    if (exl3_type_bits(dst->src[0]->type)) {
++        ggml_exl3_get_rows(params, dst);
++        return;
++    }
+ 
+     const ggml_tensor * src0 = dst->src[0];
+ 
+diff --git a/ggml/src/ggml-hexagon/CMakeLists.txt b/ggml/src/ggml-hexagon/CMakeLists.txt
+index 20c7202..7fe73a2 100644
+--- a/ggml/src/ggml-hexagon/CMakeLists.txt
++++ b/ggml/src/ggml-hexagon/CMakeLists.txt
+@@ -57,6 +57,7 @@ ggml_add_backend_library(${TARGET_NAME}
+ 
+ target_link_libraries(${TARGET_NAME} PRIVATE htp_iface)
+ target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/htp ${CMAKE_CURRENT_BINARY_DIR})
++target_include_directories(${TARGET_NAME} PRIVATE ${EXL3_ROOT}/include)
+ 
+ # Build HTP skels
+ set(HTP_SKELS)
+@@ -71,6 +72,7 @@ function(build_htp_skel V)
+             -DHEXAGON_SDK_ROOT=${HEXAGON_SDK_ROOT}
+             -DHEXAGON_TOOLS_ROOT=${HEXAGON_TOOLS_ROOT}
+             -DHEXAGON_HTP_DEBUG=${GGML_HEXAGON_HTP_DEBUG}
++            -DEXL3_ROOT=${EXL3_ROOT}
+             -DDSP_VERSION=${V}
+             -DPREBUILT_LIB_DIR="toolv19_${V}")
+     list(APPEND HTP_SKELS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so)
+diff --git a/ggml/src/ggml-hexagon/ggml-hexagon.cpp b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
+index f3ca731..a230ecf 100644
+--- a/ggml/src/ggml-hexagon/ggml-hexagon.cpp
++++ b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
+@@ -76,6 +76,7 @@
+ #include "htp/cpy-ops.h"
+ #include "htp_iface.h"
+ #include "htp-drv.h"
++#include "exl3-block.h"
+ 
+ using intvec  = std::vector<int>;
+ using uintvec = std::vector<unsigned int>;
+@@ -4507,6 +4508,7 @@ static bool ggml_hexagon_precompute_allreduce_params(
+     struct htp_allreduce_kernel_params * kparams
+ ) {
+     memset(kparams, 0, sizeof(*kparams));
++
+     kparams->rank         = (int32_t) rank;
+     kparams->n_ranks      = (int32_t) n_ranks;
+     kparams->is_row_bcast = (has_add && is_row_bcast) ? 1 : 0;
+@@ -5728,6 +5730,26 @@ static void ggml_hexagon_precompute_matmul_params_impl(
+ ) {
+     memset(kparams, 0, sizeof(*kparams));
+ 
++    if (exl3_type_bits(src0->type)) {
++        if (src0->ne[0] < 128 || src0->ne[0] > 65536 || src0->ne[1] < 128 || src0->ne[1] > 1048576) return;
++        uint64_t rows = 1;
++        for (int d = 1; d < 4; ++d) {
++            if (src1->ne[d] <= 0 || src1->ne[d] > 1024 || rows > 1024u / src1->ne[d]) return;
++            rows *= src1->ne[d];
++        }
++        const unsigned bits = exl3_type_bits(src0->type);
++        if ((uint64_t) (src0->ne[0] / 128) * (src0->ne[1] / 128) * exl3_group_bytes(bits) > UINT32_MAX) return;
++        const uint32_t nth = (uint32_t) std::min<int64_t>(sess->n_hvx, src0->ne[1] / 128);
++        const uint64_t per_thread = 32768 + rows * 512 + exl3_group_bytes(bits) + 640;
++        const uint64_t total = 131072 + rows * src0->ne[0] * 4 + nth * per_thread;
++        if (nth > 0 && total <= sess->vtcm_size) {
++            kparams->kernel_type = HTP_MM_KERNEL_EXL3;
++            kparams->n_threads = nth;
++            kparams->vtcm_size = (int32_t) total;
++        }
++        return;
++    }
++
+     const int ne00 = src0->ne[0];
+     const int ne01 = src0->ne[1];
+     const int ne02 = src0->ne[2];
+@@ -6903,6 +6925,13 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
+     if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) {
+         return false;
+     }
++    if (exl3_type_bits(src0->type)) {
++        if (src0->ne[0] % 128 || src0->ne[1] % 128 || src0->ne[2] != 1 || src0->ne[3] != 1 ||
++            !ggml_is_contiguous(src0) || src1->ne[0] != src0->ne[0]) return false;
++        struct htp_mm_kernel_params params;
++        ggml_hexagon_precompute_matmul_params(sess, src0, src1, dst, &params);
++        return params.kernel_type == HTP_MM_KERNEL_EXL3;
++    }
+ 
+     switch (src0->type) {
+         case GGML_TYPE_Q4_0:
+diff --git a/ggml/src/ggml-hexagon/htp-opnode.h b/ggml/src/ggml-hexagon/htp-opnode.h
+index 8ff3854..784c489 100644
+--- a/ggml/src/ggml-hexagon/htp-opnode.h
++++ b/ggml/src/ggml-hexagon/htp-opnode.h
+@@ -326,7 +326,9 @@ struct htp_opformat {
+             const auto * kparams = (const struct htp_mm_kernel_params *) node.kernel_params;
+             const char * path = "unknown";
+             int32_t type = kparams->kernel_type;
+-            if (type == HTP_MM_KERNEL_HMX_2D || type == HTP_MM_KERNEL_HMX_F16_BATCHED) {
++            if (type == HTP_MM_KERNEL_EXL3) {
++                path = "exl3-hvx";
++            } else if (type == HTP_MM_KERNEL_HMX_2D || type == HTP_MM_KERNEL_HMX_F16_BATCHED) {
+                 path = "hmx-tiled";
+             } else if (type == HTP_MM_KERNEL_HVX_F16_F16_VTCM || type == HTP_MM_KERNEL_HVX_F32_F32_VTCM ||
+                        type == HTP_MM_KERNEL_HVX_QUANT_ROW    || type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
+diff --git a/ggml/src/ggml-hexagon/htp/CMakeLists.txt b/ggml/src/ggml-hexagon/htp/CMakeLists.txt
+index 787badf..abf03b0 100644
+--- a/ggml/src/ggml-hexagon/htp/CMakeLists.txt
++++ b/ggml/src/ggml-hexagon/htp/CMakeLists.txt
+@@ -54,6 +54,8 @@ target_compile_definitions(${HTP_LIB} PRIVATE
+ 
+ 
+ build_idl(htp_iface.idl ${HTP_LIB})
++target_sources(${HTP_LIB} PRIVATE ${EXL3_ROOT}/src/exl3-htp.c)
++target_include_directories(${HTP_LIB} PRIVATE ${EXL3_ROOT}/include ${EXL3_ROOT}/src)
+ 
+ set_target_properties(${HTP_LIB} PROPERTIES EXPORT_COMPILE_COMMANDS ON)
+ 
+diff --git a/ggml/src/ggml-hexagon/htp/htp-ctx.h b/ggml/src/ggml-hexagon/htp/htp-ctx.h
+index 87a1f4c..e4bf7aa 100644
+--- a/ggml/src/ggml-hexagon/htp/htp-ctx.h
++++ b/ggml/src/ggml-hexagon/htp/htp-ctx.h
+@@ -145,6 +145,7 @@ static inline void htp_ops_context_set_status(struct htp_ops_context * octx, int
+ }
+ 
+ int op_matmul(struct htp_ops_context * octx);
++int op_exl3_matmul(struct htp_ops_context * octx);
+ int op_matmul_id(struct htp_ops_context * octx);
+ int op_matmul_nx(struct htp_ops_context * octx);
+ int op_matmul_id_nx(struct htp_ops_context * octx);
+diff --git a/ggml/src/ggml-hexagon/htp/htp-ops.h b/ggml/src/ggml-hexagon/htp/htp-ops.h
+index 5d2571f..47ca192 100644
+--- a/ggml/src/ggml-hexagon/htp/htp-ops.h
++++ b/ggml/src/ggml-hexagon/htp/htp-ops.h
+@@ -31,6 +31,9 @@ enum htp_data_type {
+     HTP_TYPE_I32    = 26,
+     HTP_TYPE_I64    = 27,
+     HTP_TYPE_MXFP4  = 39,
++    HTP_TYPE_EXL3_4 = 43,
++    HTP_TYPE_EXL3_6 = 44,
++    HTP_TYPE_EXL3_8 = 45,
+ 
+     // types used internally for repack, dyn.quant, etc
+     HTP_TYPE_Q4_0_TILED = 200,
+diff --git a/ggml/src/ggml-hexagon/htp/main.c b/ggml/src/ggml-hexagon/htp/main.c
+index 2dd1b3f..6d5893b 100644
+--- a/ggml/src/ggml-hexagon/htp/main.c
++++ b/ggml/src/ggml-hexagon/htp/main.c
+@@ -821,6 +821,9 @@ static int execute_op(struct htp_ops_context * octx) {
+ 
+         case HTP_OP_MUL_MAT:
+         case HTP_OP_MUL_MAT_ADD:
++            if (octx->src[0]->type == HTP_TYPE_EXL3_4 || octx->src[0]->type == HTP_TYPE_EXL3_6 || octx->src[0]->type == HTP_TYPE_EXL3_8) {
++                return op_exl3_matmul(octx);
++            }
+             return op_matmul(octx);
+ 
+         case HTP_OP_MUL_MAT_ID:
+diff --git a/ggml/src/ggml-hexagon/htp/matmul-ops.h b/ggml/src/ggml-hexagon/htp/matmul-ops.h
+index 1d11a4c..70afe18 100644
+--- a/ggml/src/ggml-hexagon/htp/matmul-ops.h
++++ b/ggml/src/ggml-hexagon/htp/matmul-ops.h
+@@ -83,6 +83,7 @@ enum htp_mm_kernel_type {
+     // HVX quantized paths
+     HTP_MM_KERNEL_HVX_QUANT_ROW,      // standard row-wise parallel quantization
+     HTP_MM_KERNEL_HVX_QUANT_BLOCK,    // parallel block-wise quantization
++    HTP_MM_KERNEL_EXL3,
+ };
+ 
+ // Op-specific struct for precomputed matmul params
+diff --git a/ggml/src/ggml-quants.c b/ggml/src/ggml-quants.c
+index 7750a72..2994c62 100644
+--- a/ggml/src/ggml-quants.c
++++ b/ggml/src/ggml-quants.c
+@@ -5392,6 +5392,18 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
+     const size_t nb = nbytes/ggml_type_size(type);
+ 
+     switch (type) {
++        case GGML_TYPE_EXL3_4:
++        case GGML_TYPE_EXL3_6:
++        case GGML_TYPE_EXL3_8: {
++            const size_t bits = type == GGML_TYPE_EXL3_4 ? 4 : type == GGML_TYPE_EXL3_6 ? 6 : 8;
++            const size_t group_size = 2048 * bits + 512;
++            if (nbytes % group_size) return false;
++            for (size_t offset = 0; offset < nbytes; offset += group_size) {
++                const uint16_t * scales = (const uint16_t *) ((const uint8_t *) data + offset + 2048 * bits);
++                for (size_t i = 0; i < 256; ++i) if ((scales[i] & 0x7c00) == 0x7c00) return false;
++            }
++            return true;
++        }
+         case GGML_TYPE_BF16:
+             {
+                 int nans = 0;
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+index 9bcabdb..c78a3cf 100644
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -630,6 +630,9 @@ FILE * ggml_fopen(const char * fname, const char * mode) {
+ }
+ 
+ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
++    [GGML_TYPE_EXL3_4] = { .type_name = "exl3_4", .blck_size = 128, .type_size = 68,  .is_quantized = true },
++    [GGML_TYPE_EXL3_6] = { .type_name = "exl3_6", .blck_size = 128, .type_size = 100, .is_quantized = true },
++    [GGML_TYPE_EXL3_8] = { .type_name = "exl3_8", .blck_size = 128, .type_size = 132, .is_quantized = true },
+     [GGML_TYPE_I8] = {
+         .type_name                = "i8",
+         .blck_size                = 1,
+diff --git a/gguf-py/gguf/constants.py b/gguf-py/gguf/constants.py
+index c003ed2..d88b2fa 100644
+--- a/gguf-py/gguf/constants.py
++++ b/gguf-py/gguf/constants.py
+@@ -5971,6 +5971,9 @@ class GGMLQuantizationType(IntEnum):
+     NVFP4   = 40
+     Q1_0    = 41
+     Q2_0    = 42
++    EXL3_4  = 43
++    EXL3_6  = 44
++    EXL3_8  = 45
+ 
+ 
+ class ExpertGatingFuncType(IntEnum):
+@@ -6027,6 +6030,9 @@ class LlamaFileType(IntEnum):
+     MOSTLY_NVFP4         = 39  # except 1d tensors
+     MOSTLY_Q1_0          = 40  # except 1d tensors
+     MOSTLY_Q2_0          = 41  # except 1d tensors
++    MOSTLY_EXL3_4        = 42
++    MOSTLY_EXL3_6        = 43
++    MOSTLY_EXL3_8        = 44
+ 
+     GUESSED              = 1024  # not specified in the model file
+ 
+@@ -6181,6 +6187,9 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
+     GGMLQuantizationType.NVFP4:   (64, 4 + 32),
+     GGMLQuantizationType.Q1_0:    (128, 2 + 16),
+     GGMLQuantizationType.Q2_0:    (64, 2 + 16),
++    GGMLQuantizationType.EXL3_4:  (128, 68),
++    GGMLQuantizationType.EXL3_6:  (128, 100),
++    GGMLQuantizationType.EXL3_8:  (128, 132),
+ }
+ 
+ 
+diff --git a/include/llama.h b/include/llama.h
+index 6032902..49ef176 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -158,6 +158,9 @@ extern "C" {
+         LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
+         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
+         LLAMA_FTYPE_MOSTLY_Q2_0          = 41, // except 1d tensors
++        LLAMA_FTYPE_MOSTLY_EXL3_4        = 42,
++        LLAMA_FTYPE_MOSTLY_EXL3_6        = 43,
++        LLAMA_FTYPE_MOSTLY_EXL3_8        = 44,
+ 
+         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
+     };
+diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
+index 6cc0b20..2b3b58b 100644
+--- a/src/llama-model-loader.cpp
++++ b/src/llama-model-loader.cpp
+@@ -39,6 +39,9 @@ const char * llama_ftype_name(llama_ftype ftype) {
+         case LLAMA_FTYPE_MOSTLY_BF16:      name = LLAMA_FTYPE_PREFIX "BF16"; break;
+         case LLAMA_FTYPE_MOSTLY_Q1_0:      name = LLAMA_FTYPE_PREFIX "Q1_0"; break;
+         case LLAMA_FTYPE_MOSTLY_Q2_0:      name = LLAMA_FTYPE_PREFIX "Q2_0"; break;
++        case LLAMA_FTYPE_MOSTLY_EXL3_4:    name = LLAMA_FTYPE_PREFIX "EXL3_4"; break;
++        case LLAMA_FTYPE_MOSTLY_EXL3_6:    name = LLAMA_FTYPE_PREFIX "EXL3_6"; break;
++        case LLAMA_FTYPE_MOSTLY_EXL3_8:    name = LLAMA_FTYPE_PREFIX "EXL3_8"; break;
+         case LLAMA_FTYPE_MOSTLY_Q4_0:      name = LLAMA_FTYPE_PREFIX "Q4_0"; break;
+         case LLAMA_FTYPE_MOSTLY_Q4_1:      name = LLAMA_FTYPE_PREFIX "Q4_1"; break;
+         case LLAMA_FTYPE_MOSTLY_Q5_0:      name = LLAMA_FTYPE_PREFIX "Q5_0"; break;
+@@ -779,6 +782,9 @@ llama_model_loader::llama_model_loader(
+             case GGML_TYPE_NVFP4:   ftype = LLAMA_FTYPE_MOSTLY_NVFP4;   break;
+             case GGML_TYPE_Q1_0:    ftype = LLAMA_FTYPE_MOSTLY_Q1_0;    break;
+             case GGML_TYPE_Q2_0:    ftype = LLAMA_FTYPE_MOSTLY_Q2_0;    break;
++            case GGML_TYPE_EXL3_4:  ftype = LLAMA_FTYPE_MOSTLY_EXL3_4;  break;
++            case GGML_TYPE_EXL3_6:  ftype = LLAMA_FTYPE_MOSTLY_EXL3_6;  break;
++            case GGML_TYPE_EXL3_8:  ftype = LLAMA_FTYPE_MOSTLY_EXL3_8;  break;
+             default:
+                 {
+                     LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index c44189c..95a3672 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -289,6 +289,12 @@ endif()
+ 
+ # TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
+ llama_build(test-backend-ops.cpp)
++if(EXL3_ROOT)
++    set(LLAMA_TEST_NAME test-exl3-graph)
++    llama_build(${EXL3_ROOT}/tests/test-exl3-graph.cpp)
++    unset(LLAMA_TEST_NAME)
++    target_include_directories(test-exl3-graph PRIVATE ${EXL3_ROOT}/include)
++endif()
+ 
+ llama_build_and_test(test-tiled-mulmat.cpp)
+ llama_build_and_test(test-model-load-cancel.cpp LABEL "model")

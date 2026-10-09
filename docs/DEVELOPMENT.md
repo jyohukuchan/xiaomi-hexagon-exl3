@@ -84,3 +84,17 @@ build-codec-native/exl3_model_info models/index-translate-2b-hexagon 124160
 The Windows Android build script deploys this utility as well. It can compare the embedding with a real-model CUDA fixture by passing the fixture path and its column index after the token ID.
 
 The converter entry point applies `tools/refit_scales.py` at runtime. This adapter keeps upstream's Hessian-metric scale fitting while chunking large temporary operations. Its CUDA parity check is `tests/test_refit_cuda.py`; it is separate from the lightweight CPU CI suite.
+
+## Experimental graph integration
+
+```powershell
+.\tools\apply_runtime_patch.ps1
+.\tools\build_runtime.ps1 -Push
+docker run --rm --volume C:\coding-local\xiaomi-hexagon-exl3:/workspace --workdir /workspace `
+  xiaomi-exl3-quantize:dev python tools/export_native_gguf.py `
+  models/index-translate-2b-hexagon --output models/index-translate-2b-exl3.hxgguf
+```
+
+The patch is stored in the parent repository; the submodule stays pinned to its original upstream commit. An applied overlay makes its working directory dirty by design. `apply_runtime_patch.ps1` accepts an already applied patch and refuses conflicting edits.
+
+The `.hxgguf` file uses project-specific weight type IDs and must be run with this patched runtime. Its payload remains below 5 bpw. The integration is under investigation: consult `docs/validation/runtime-integration.md` before interpreting generated output or speed as a completed milestone.
