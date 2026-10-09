@@ -76,27 +76,34 @@ static void exl3_worker(unsigned nth, unsigned ith, void * opaque) {
     for (unsigned nb = ith; nb < task->n / 128; nb += nth) {
         memset(result, 0, task->rows * 128 * 4);
         for (unsigned kb = 0; kb < task->k / 128; ++kb) {
-            htp_trace_event_start(trace, HTP_TRACE_EVT_HVX_W_DEQUANT, (uint16_t) kb);
+            htp_trace_event_start(trace, HTP_TRACE_EVT_DMA, (uint16_t) kb);
             const unsigned char * group = (const unsigned char *) (uintptr_t) weight->data +
                 ((size_t) nb * (task->k / 128) + kb) * exl3_group_bytes(task->bits);
-            memcpy(packed, group, 2048u * task->bits);
+            if (hex_is_aligned(group, 128)) hvx_copy_aa((uint8_t *) packed, group, 2048u * task->bits, 1);
+            else hvx_copy_au((uint8_t *) packed, group, 2048u * task->bits, 1);
+            htp_trace_event_stop(trace, HTP_TRACE_EVT_DMA, (uint16_t) kb);
+            htp_trace_event_start(trace, HTP_TRACE_EVT_HVX_W_DEQUANT, (uint16_t) kb);
             for (unsigned r = 0; r < 8; ++r) for (unsigned c = 0; c < 8; ++c) {
                 exl3_hvx_decode_tile_async(packed + (r * 8 + c) * 16 * task->bits, task->bits, NULL, gathered,
                                      decoded + ((c / 2) * 4 + r / 2) * 1024 + (r % 2) * 512 + (c % 2) * 32);
             }
             exl3_hvx_sync(decoded + 128 * 128);
             htp_trace_event_stop(trace, HTP_TRACE_EVT_HVX_W_DEQUANT, (uint16_t) kb);
-            htp_trace_event_start(trace, HTP_TRACE_EVT_HVX_COMP, (uint16_t) kb);
             if (task->hmx) {
                 struct exl3_hmx_job job = {hmx_output, task->act_half + kb * 4096, decoded, task->scales};
+                htp_trace_event_start(trace, HTP_TRACE_EVT_FENCE, (uint16_t) kb);
                 qurt_mutex_lock(task->hmx_lock);
+                htp_trace_event_stop(trace, HTP_TRACE_EVT_FENCE, (uint16_t) kb);
+                htp_trace_event_start(trace, HTP_TRACE_EVT_BUFF, (uint16_t) kb);
                 if (!hmx_queue_push(task->octx->ctx->hmx_queue, hmx_queue_make_desc(exl3_hmx_compute, &job))) {
                     htp_ops_context_set_status(task->octx, HTP_STATUS_INTERNAL_ERR);
                     qurt_mutex_unlock(task->hmx_lock);
                     return;
                 }
                 hmx_queue_pop(task->octx->ctx->hmx_queue);
+                htp_trace_event_stop(trace, HTP_TRACE_EVT_BUFF, (uint16_t) kb);
                 qurt_mutex_unlock(task->hmx_lock);
+                htp_trace_event_start(trace, HTP_TRACE_EVT_HVX_COMP, (uint16_t) kb);
                 for (unsigned row = 0; row < task->rows; ++row) for (unsigned col = 0; col < 4; ++col) {
                     const HVX_VectorPair pair = hvx_vec_f16_to_f32_shuff(hvx_vmem(hmx_output + col * 1024 + (row / 2) * 64));
                     const HVX_Vector value = row % 2 ? Q6_V_hi_W(pair) : Q6_V_lo_W(pair);
@@ -104,6 +111,7 @@ static void exl3_worker(unsigned nth, unsigned ith, void * opaque) {
                     dst[col] = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(dst[col], value));
                 }
             } else {
+                htp_trace_event_start(trace, HTP_TRACE_EVT_HVX_COMP, (uint16_t) kb);
                 for (unsigned i = 0; i < 128; ++i) {
                     HVX_Vector w[4];
                     for (unsigned col = 0; col < 4; ++col) {
@@ -124,6 +132,7 @@ static void exl3_worker(unsigned nth, unsigned ith, void * opaque) {
             }
             htp_trace_event_stop(trace, HTP_TRACE_EVT_HVX_COMP, (uint16_t) kb);
         }
+        htp_trace_event_start(trace, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) nb);
         const unsigned char * group = (const unsigned char *) (uintptr_t) weight->data +
             (size_t) nb * (task->k / 128) * exl3_group_bytes(task->bits);
         const uint16_t * sv = exl3_group_sv(group, task->bits);
@@ -132,6 +141,7 @@ static void exl3_worker(unsigned nth, unsigned ith, void * opaque) {
             float * dst = (float *) ((uintptr_t) output->data + offset_row(output, task->first_row + row)) + nb * 128;
             for (unsigned j = 0; j < 128; ++j) dst[j] = result[row * 128 + j] * half_value(sv + j);
         }
+        htp_trace_event_stop(trace, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) nb);
     }
 }
 
