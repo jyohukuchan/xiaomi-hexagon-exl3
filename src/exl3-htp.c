@@ -48,6 +48,19 @@ struct exl3_task {
 };
 
 struct exl3_hmx_job { uint16_t * output; const uint16_t * input; const uint16_t * weight; const uint16_t * scales; };
+
+#define EXL3_DECODE_GROUP(BITS) \
+static __attribute__((noinline)) void exl3_decode_group_##BITS(const uint16_t * packed, uint16_t * decoded, HVX_Vector * gathered) { \
+    for (unsigned r = 0; r < 8; ++r) for (unsigned c = 0; c < 8; ++c) { \
+        exl3_hvx_decode_tile_async(packed + (r * 8 + c) * 16 * BITS, BITS, NULL, gathered, \
+            decoded + ((c / 2) * 4 + r / 2) * 1024 + (r % 2) * 512 + (c % 2) * 32); \
+    } \
+}
+EXL3_DECODE_GROUP(4)
+EXL3_DECODE_GROUP(6)
+EXL3_DECODE_GROUP(8)
+#undef EXL3_DECODE_GROUP
+
 static void exl3_hmx_compute(void * opaque) {
     const struct exl3_hmx_job * job = opaque;
     asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned) job->scales));
@@ -82,10 +95,9 @@ static void exl3_worker(unsigned nth, unsigned ith, void * opaque) {
             else hvx_copy_au((uint8_t *) packed, group, 2048u * task->bits, 1);
             htp_trace_event_stop(trace, HTP_TRACE_EVT_DMA, (uint16_t) kb);
             htp_trace_event_start(trace, HTP_TRACE_EVT_HVX_W_DEQUANT, (uint16_t) kb);
-            for (unsigned r = 0; r < 8; ++r) for (unsigned c = 0; c < 8; ++c) {
-                exl3_hvx_decode_tile_async(packed + (r * 8 + c) * 16 * task->bits, task->bits, NULL, gathered,
-                                     decoded + ((c / 2) * 4 + r / 2) * 1024 + (r % 2) * 512 + (c % 2) * 32);
-            }
+            if (task->bits == 4) exl3_decode_group_4(packed, decoded, gathered);
+            else if (task->bits == 6) exl3_decode_group_6(packed, decoded, gathered);
+            else exl3_decode_group_8(packed, decoded, gathered);
             exl3_hvx_sync(decoded + 128 * 128);
             htp_trace_event_stop(trace, HTP_TRACE_EVT_HVX_W_DEQUANT, (uint16_t) kb);
             if (task->hmx) {
