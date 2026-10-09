@@ -13,8 +13,11 @@ jobs:
         run: ctest --test-dir build --output-on-failure
       - name: Test model audit
         run: python3 -m unittest discover -s tests -p 'test_model_audit.py'
+      - name: Test API probe validation
+        run: python3 -m unittest discover -s tests -p 'test_api_probe.py'
       - name: Compile patched graph runtime
         run: |
           git -C third_party/llama.cpp apply ../../patches/llama-exl3.patch
           cmake -S third_party/llama.cpp -B build-runtime -DCMAKE_BUILD_TYPE=Release -DEXL3_ROOT="$PWD" -DGGML_HEXAGON=OFF -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DLLAMA_OPENSSL=OFF
-          cmake --build build-runtime --target test-exl3-graph trace_runtime -j 2
+          cmake --build build-runtime --target test-exl3-graph trace_runtime test-hexagon-attention test-api-serialization -j 2
+          build-runtime/bin/test-api-serialization

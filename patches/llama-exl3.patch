@@ -143,7 +143,7 @@ index 20c7202..7fe73a2 100644
              -DPREBUILT_LIB_DIR="toolv19_${V}")
      list(APPEND HTP_SKELS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so)
 diff --git a/ggml/src/ggml-hexagon/ggml-hexagon.cpp b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
-index f3ca731..3bb4f15 100644
+index f3ca731..7144e58 100644
 --- a/ggml/src/ggml-hexagon/ggml-hexagon.cpp
 +++ b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
 @@ -76,6 +76,7 @@
@@ -172,7 +172,17 @@ index f3ca731..3bb4f15 100644
      kparams->rank         = (int32_t) rank;
      kparams->n_ranks      = (int32_t) n_ranks;
      kparams->is_row_bcast = (has_add && is_row_bcast) ? 1 : 0;
-@@ -5728,6 +5733,29 @@ static void ggml_hexagon_precompute_matmul_params_impl(
+@@ -5311,7 +5316,8 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
+         return false;
+     }
+ 
+-    if (dst->ne[3] != 1) {
++    if (dst->ne[3] < 1 || dst->ne[3] > 8 || src0->ne[3] != dst->ne[3] ||
++        src1->ne[3] != src0->ne[3] || src2->ne[3] != src0->ne[3]) {
+         return false;
+     }
+ 
+@@ -5728,6 +5734,29 @@ static void ggml_hexagon_precompute_matmul_params_impl(
  ) {
      memset(kparams, 0, sizeof(*kparams));
  
@@ -202,7 +212,7 @@ index f3ca731..3bb4f15 100644
      const int ne00 = src0->ne[0];
      const int ne01 = src0->ne[1];
      const int ne02 = src0->ne[2];
-@@ -6903,6 +6931,13 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
+@@ -6903,6 +6932,13 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
      if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) {
          return false;
      }
@@ -406,10 +416,10 @@ index 6cc0b20..2b3b58b 100644
                  {
                      LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index c44189c..7ff8bc9 100644
+index c44189c..17e866d 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -289,6 +289,15 @@ endif()
+@@ -289,6 +289,22 @@ endif()
  
  # TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
  llama_build(test-backend-ops.cpp)
@@ -421,7 +431,164 @@ index c44189c..7ff8bc9 100644
 +    add_executable(trace_runtime ${EXL3_ROOT}/tools/trace_runtime.cpp)
 +    target_link_libraries(trace_runtime PRIVATE llama ggml ggml-base)
 +    install(TARGETS trace_runtime RUNTIME DESTINATION bin)
++    add_executable(test-hexagon-attention ${EXL3_ROOT}/tests/test-hexagon-attention.cpp)
++    target_link_libraries(test-hexagon-attention PRIVATE ggml ggml-base)
++    if(LLAMA_BUILD_SERVER)
++        add_executable(test-api-serialization ${EXL3_ROOT}/tests/test-api-serialization.cpp)
++        target_include_directories(test-api-serialization PRIVATE ${CMAKE_SOURCE_DIR}/tools/server)
++        target_link_libraries(test-api-serialization PRIVATE server-context)
++    endif()
 +endif()
  
  llama_build_and_test(test-tiled-mulmat.cpp)
  llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
+diff --git a/tools/server/server-task.cpp b/tools/server/server-task.cpp
+index 21c1fe4..0f78acf 100644
+--- a/tools/server/server-task.cpp
++++ b/tools/server/server-task.cpp
+@@ -372,7 +372,7 @@ json server_task_result_cmpl_final::usage_json_oaicompat() {
+ }
+ 
+ json server_task_result_cmpl_final::to_json_oaicompat() {
+-    std::time_t t = std::time(0);
++    const std::time_t t = oaicompat_created;
+     json logprobs = json(nullptr); // OAI default to null
+     if (!stream && probs_output.size() > 0) {
+         logprobs = json{
+@@ -396,7 +396,7 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
+         {"model",              oaicompat_model},
+         {"system_fingerprint", std::string(llama_build_info())},
+         {"object",             "text_completion"},
+-        {"usage",              usage_json_oaicompat()},
++        {"usage",              stream ? json(nullptr) : usage_json_oaicompat()},
+         {"id", oaicompat_cmpl_id}
+     };
+ 
+@@ -408,6 +408,15 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
+         res["timings"] = stats.to_json();
+     }
+ 
++    if (stream) {
++        json chunks = json::array({res});
++        if (include_usage) {
++            res["choices"] = json::array();
++            res["usage"] = usage_json_oaicompat();
++            chunks.push_back(std::move(res));
++        }
++        return chunks;
++    }
+     return res;
+ }
+ 
+@@ -436,7 +445,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
+         };
+     }
+ 
+-    std::time_t t = std::time(0);
++    const std::time_t t = oaicompat_created;
+ 
+     json res = json {
+         {"choices",            json::array({choice})},
+@@ -460,7 +469,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
+ }
+ 
+ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
+-    std::time_t t = std::time(0);
++    const std::time_t t = oaicompat_created;
+     std::string finish_reason = "length";
+     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+         finish_reason = oaicompat_msg.tool_calls.empty() ? "stop" : "tool_calls";
+@@ -481,6 +490,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
+             {"model", oaicompat_model},
+             {"system_fingerprint", std::string(llama_build_info())},
+             {"object", "chat.completion.chunk"},
++            {"usage", nullptr},
+         });
+     }
+ 
+@@ -497,6 +507,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
+         {"model",              oaicompat_model},
+         {"system_fingerprint", std::string(llama_build_info())},
+         {"object",             "chat.completion.chunk"},
++        {"usage",              nullptr},
+     });
+ 
+     if (include_usage) {
+@@ -987,6 +998,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
+ //
+ void server_task_result_cmpl_partial::update(task_result_state & state) {
+     is_updated = true;
++    oaicompat_created = state.created;
+     if (is_begin) {
+         return; // begin marker only flushes headers, skip parsing
+     }
+@@ -1071,7 +1083,7 @@ json server_task_result_cmpl_partial::to_json_non_oaicompat() {
+ }
+ 
+ json server_task_result_cmpl_partial::to_json_oaicompat() {
+-    std::time_t t = std::time(0);
++    const std::time_t t = oaicompat_created;
+     json logprobs = json(nullptr); // OAI default to null
+     if (prob_output.probs.size() > 0) {
+         logprobs = json{
+@@ -1091,6 +1103,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat() {
+         {"model",              oaicompat_model},
+         {"system_fingerprint", std::string(llama_build_info())},
+         {"object",             "text_completion"},
++        {"usage",              nullptr},
+         {"id",                 oaicompat_cmpl_id}
+     };
+ 
+@@ -1110,7 +1123,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat() {
+ 
+ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
+     bool first = n_decoded == 1;
+-    std::time_t t = std::time(0);
++    const std::time_t t = oaicompat_created;
+     json choices;
+ 
+     std::vector<json> deltas;
+@@ -1128,6 +1141,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
+             {"model", oaicompat_model},
+             {"system_fingerprint", std::string(llama_build_info())},
+             {"object", "chat.completion.chunk"},
++            {"usage", nullptr},
+         });
+     };
+     // We have to send an initial update to conform to openai behavior
+diff --git a/tools/server/server-task.h b/tools/server/server-task.h
+index 0cbc5f3..b6025c8 100644
+--- a/tools/server/server-task.h
++++ b/tools/server/server-task.h
+@@ -7,6 +7,7 @@
+ #include <unordered_set>
+ #include <list>
+ #include <map>
++#include <ctime>
+ 
+ // TODO: prevent including the whole server-common.h as we only use server_tokens
+ #include "server-common.h"
+@@ -104,6 +105,7 @@ struct task_params {
+ 
+ // struct for tracking the state of a task (e.g., for streaming)
+ struct task_result_state {
++    std::time_t created = std::time(nullptr);
+     // tracking diffs for partial tool calls
+     std::vector<common_chat_msg_diff> diffs;
+     common_chat_parser_params chat_parser_params;
+@@ -304,6 +306,7 @@ struct result_prompt_progress {
+ struct server_task_result {
+     int id           = -1;
+     int id_slot      = -1;
++    std::time_t oaicompat_created = 0;
+ 
+     // TODO @ngxson : remove this field and implement a mapping task_id -> idx in the response_reader
+     size_t index = 0; // to be used for batched tasks
+@@ -397,6 +400,7 @@ struct server_task_result_cmpl_final : server_task_result {
+ 
+     virtual void update(task_result_state & state) override {
+         is_updated = true;
++        oaicompat_created = state.created;
+         oaicompat_msg = state.update_chat_msg(content, false, oaicompat_msg_diffs);
+ 
+         oai_resp_id = state.oai_resp_id;
