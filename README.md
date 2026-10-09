@@ -2,7 +2,7 @@
 
 Experimental inference engine work for running EXL3-quantized language models on the Qualcomm Hexagon NPU in the Xiaomi 14 Ultra (Snapdragon 8 Gen 3 / SM8650).
 
-The first end-to-end target is [IndexTeam/Index-Translate-2B](https://huggingface.co/IndexTeam/Index-Translate-2B) at approximately 4 bits per weight, with request batching and an OpenAI-compatible HTTP API.
+The first end-to-end target is [IndexTeam/Index-Translate-2B](https://huggingface.co/IndexTeam/Index-Translate-2B), with request batching and an OpenAI-compatible HTTP API. Most weights will use approximately 4 bpw, while precision-sensitive tensors may use higher precision provided the complete serialized weight payload remains at or below 5.0 average bits per parameter.
 
 > [!IMPORTANT]
 > This repository is currently at the hardware-validation stage. It does not yet contain a working EXL3 inference engine.
@@ -35,6 +35,8 @@ Additional observations:
 - Batch 512 selects HMX kernels
 - A short sustained load reduced Q4_0 batch-512 throughput from 6.61 to 5.70 TFLOPS as the NPU thermal sensors heated up
 
+The single-request decode target is **15 tokens/second or faster** on the Xiaomi 14 Ultra. See [project goals](docs/GOALS.md) for the current acceptance criteria and cache policy.
+
 See the [full benchmark report](docs/benchmarks/2026-10-09-xiaomi-14-ultra.md) for methodology and power-measurement limitations.
 
 ## Planned architecture
@@ -45,6 +47,10 @@ See the [full benchmark report](docs/benchmarks/2026-10-09-xiaomi-14-ultra.md) f
 4. Implement persistent model buffers, KV/state management, and request batching.
 5. Expose streaming chat/completions endpoints compatible with the OpenAI API.
 6. Measure accuracy, sustained throughput, memory use, and whole-device power.
+
+## License
+
+Project-authored code is available under the [MIT License](LICENSE). Third-party components retain their original licenses and notices.
 
 ## Related projects
 
