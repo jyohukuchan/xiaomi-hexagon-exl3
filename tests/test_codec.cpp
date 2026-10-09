@@ -2,6 +2,7 @@
 #include "exl3-block.h"
 
 #include <cmath>
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <vector>
@@ -18,6 +19,16 @@ int main() {
             const float exact = float(1774 * int(sum) - 905216) / 262144.0f;
             check(std::fabs(exact) >= std::ldexp(1.0f, -14) && std::fabs(exact) < 65504.0f, "mul1 values remain normal FP16");
             check(exl3::float_to_half(exact) == exl3::decode_codebook(uint16_t(state), exl3::Codebook::mul1), "Exact mul1 integer formula");
+            uint32_t float_bits;
+            std::memcpy(&float_bits, &exact, sizeof(float_bits));
+            const uint32_t magnitude = float_bits & 0x7fffffff;
+            const uint32_t tie = (magnitude >> 13) & 1;
+            const uint32_t code = magnitude - 0x38000001u + tie;
+            check(code <= 0x7fffffffu - 4096u, "Packed-rounding input does not overflow signed word");
+            const uint32_t rounded = (code + 4096u) >> 13;
+            check(rounded <= 32767u, "Packed-rounding saturation is inactive");
+            const uint16_t packed_half = uint16_t(rounded | ((float_bits >> 16) & 0x8000));
+            check(packed_half == exl3::decode_codebook(uint16_t(state), exl3::Codebook::mul1), "Exact packed-rounding mul1 formula");
         }
         check(exl3_row_chunk(4, 6144, 4, 8 * 1024 * 1024) == 32, "FFN row chunk capacity");
         check(exl3_row_chunk(4, 2048, 0, 8 * 1024 * 1024) == 0, "Reject no workers");

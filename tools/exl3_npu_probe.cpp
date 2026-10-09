@@ -58,7 +58,7 @@ int main() {
         std::cout << "hadamard_hvx normalize=" << normalize << " status=" << status << " mismatches=" << mismatches << " nmse=" << nmse
                   << " max_error=" << max_error << " cycles=" << cycles << '\n';
     }
-    for (unsigned mode : {0u, 1u}) {
+    for (unsigned mode : {0u, 1u, 2u}) {
         std::vector<uint16_t> states(65536), output(65536);
         for (size_t i = 0; i < states.size(); ++i) states[i] = uint16_t(i);
         uint64 cycles = 0;

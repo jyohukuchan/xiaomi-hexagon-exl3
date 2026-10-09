@@ -10,13 +10,16 @@ static inline HVX_Vector exl3_hvx_mul1_sum(HVX_Vector low, HVX_Vector high) {
     const HVX_Vector product = Q6_Vw_vadd_VwVw(low, Q6_Vw_vasl_VwR(high, 16));
     return Q6_Vuw_vrmpy_VubRub(product, 0x01010101);
 }
-static inline HVX_Vector exl3_hvx_mul1_half(HVX_Vector low, HVX_Vector high) {
+static inline HVX_Vector exl3_hvx_mul1_float(HVX_Vector low, HVX_Vector high) {
     // Dot four unsigned bytes with ones instead of shift/mask/add reduction.
     const HVX_Vector sum = exl3_hvx_mul1_sum(low, high);
     // The codebook is exactly (1774 * sum - 905216) / 2^18.
     const HVX_Vector numerator = Q6_Vw_vsub_VwVw(Q6_Vw_vmpyi_VwRh(sum, 0x06ee06ee), Q6_V_vsplat_R(905216));
     // The numerator magnitude fits 20 bits; exponent rebias scales it exactly.
-    const HVX_Vector f = Q6_Vw_vsub_VwVw(Q6_Vsf_equals_Vw(numerator), Q6_V_vsplat_R(18u << 23));
+    return Q6_Vw_vsub_VwVw(Q6_Vsf_equals_Vw(numerator), Q6_V_vsplat_R(18u << 23));
+}
+static inline HVX_Vector exl3_hvx_mul1_half(HVX_Vector low, HVX_Vector high) {
+    const HVX_Vector f = exl3_hvx_mul1_float(low, high);
     const HVX_Vector sign = Q6_V_vand_VV(Q6_Vuw_vlsr_VuwR(f, 16), Q6_V_vsplat_R(0x8000));
     // All mul1 values are normal FP16. Round halfway cases to an even mantissa.
     HVX_Vector magnitude = Q6_V_vand_VV(f, Q6_V_vsplat_R(0x7fffffff));
@@ -25,12 +28,30 @@ static inline HVX_Vector exl3_hvx_mul1_half(HVX_Vector low, HVX_Vector high) {
     magnitude = Q6_Vuw_vlsr_VuwR(Q6_Vw_vsub_VwVw(magnitude, Q6_V_vsplat_R(0x38000000)), 13);
     return Q6_V_vor_VV(sign, magnitude);
 }
-static inline HVX_Vector exl3_hvx_mul1(HVX_Vector states) {
+static inline HVX_Vector exl3_hvx_mul1_reference(HVX_Vector states) {
     const HVX_VectorPair low = Q6_Wuw_vmpy_VuhRuh(states, 0xd12dd12d);
     const HVX_VectorPair high = Q6_Wuw_vmpy_VuhRuh(states, 0x83dc83dc);
     const HVX_Vector even = exl3_hvx_mul1_half(Q6_V_lo_W(low), Q6_V_lo_W(high));
     const HVX_Vector odd = exl3_hvx_mul1_half(Q6_V_hi_W(low), Q6_V_hi_W(high));
     return Q6_Vh_vshuff_Vh(Q6_Vh_vpacke_VwVw(odd, even));
+}
+static inline HVX_Vector exl3_hvx_mul1_round_code(HVX_Vector f) {
+    const HVX_Vector magnitude = Q6_V_vand_VV(f, Q6_V_vsplat_R(0x7fffffff));
+    const HVX_Vector tie = Q6_V_vand_VV(Q6_Vuw_vlsr_VuwR(magnitude, 13), Q6_V_vsplat_R(1));
+    // The rounded shift supplies 4096; subtract one for an even lower mantissa.
+    return Q6_Vw_vadd_VwVw(Q6_Vw_vsub_VwVw(magnitude, Q6_V_vsplat_R(0x38000001)), tie);
+}
+static inline HVX_Vector exl3_hvx_mul1_packed(HVX_Vector states) {
+    const HVX_VectorPair low = Q6_Wuw_vmpy_VuhRuh(states, 0xd12dd12d);
+    const HVX_VectorPair high = Q6_Wuw_vmpy_VuhRuh(states, 0x83dc83dc);
+    const HVX_Vector even = exl3_hvx_mul1_float(Q6_V_lo_W(low), Q6_V_lo_W(high));
+    const HVX_Vector odd = exl3_hvx_mul1_float(Q6_V_hi_W(low), Q6_V_hi_W(high));
+    HVX_Vector result = Q6_Vh_vasr_VwVwR_rnd_sat(exl3_hvx_mul1_round_code(odd), exl3_hvx_mul1_round_code(even), 13);
+    const HVX_Vector signs = Q6_Vh_vpacke_VwVw(Q6_Vuw_vlsr_VuwR(odd, 16), Q6_Vuw_vlsr_VuwR(even, 16));
+    return Q6_V_vor_VV(result, Q6_V_vand_VV(Q6_Vh_vshuff_Vh(signs), Q6_Vh_vsplat_R(0x8000)));
+}
+static inline HVX_Vector exl3_hvx_mul1(HVX_Vector states) {
+    return exl3_hvx_mul1_packed(states);
 }
 static inline uint16_t exl3_mul1_sum_value(unsigned sum) {
     union { float f; uint32_t bits; } value;

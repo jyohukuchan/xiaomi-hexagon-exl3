@@ -10,14 +10,15 @@ $docker = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
 $deviceRoot = '/data/local/tmp/xiaomi-hexagon-exl3'
 $localState = Join-Path $repo 'benchmark-raw'
 $keyFile = Join-Path $localState 'device-api.key'
+. (Join-Path $PSScriptRoot 'adb_query.ps1')
 
 function Get-ProjectProcesses {
-    $processIds = & $adb -s $Serial shell pidof llama-server 2>$null
+    $processIds = Invoke-ProjectAdbQuery -Adb $adb -Serial $Serial -Command 'pidof llama-server || true'
     foreach ($deviceProcessId in (($processIds -join ' ') -split '\s+')) {
         if ($deviceProcessId -notmatch '^\d+$') { continue }
-        $cwd = & $adb -s $Serial shell readlink "/proc/$deviceProcessId/cwd" 2>$null
+        $cwd = Invoke-ProjectAdbQuery -Adb $adb -Serial $Serial -Command "readlink /proc/$deviceProcessId/cwd 2>/dev/null || true"
         if (($cwd -join '').Trim() -ne $deviceRoot) { continue }
-        $command = & $adb -s $Serial shell "tr '\000' ' ' < /proc/$deviceProcessId/cmdline" 2>$null
+        $command = Invoke-ProjectAdbQuery -Adb $adb -Serial $Serial -Command "tr '\000' ' ' < /proc/$deviceProcessId/cmdline 2>/dev/null || true"
         if (($command -join ' ') -match '^runtime/bin/llama-server .*models/index-translate-2b-exl3-v2\.hxgguf') {
             [int]$deviceProcessId
         }
