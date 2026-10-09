@@ -62,7 +62,7 @@ static uint64_t offset_row(const struct htp_tensor * tensor, unsigned row) {
 
 struct exl3_task {
     struct htp_ops_context * octx;
-    unsigned bits, k, n, rows;
+    unsigned bits, k, n, rows, first_row;
     size_t per_thread;
     uint16_t * table;
     float * xh;
@@ -109,13 +109,14 @@ static void exl3_worker(unsigned nth, unsigned ith, void * opaque) {
         const uint16_t * sv = exl3_group_sv(group, task->bits);
         for (unsigned row = 0; row < task->rows; ++row) {
             had128(result + row * 128);
-            float * dst = (float *) ((uintptr_t) output->data + offset_row(output, row)) + nb * 128;
+            float * dst = (float *) ((uintptr_t) output->data + offset_row(output, task->first_row + row)) + nb * 128;
             for (unsigned j = 0; j < 128; ++j) dst[j] = result[row * 128 + j] * half_value(sv + j);
         }
     }
 }
 
 int op_exl3_matmul(struct htp_ops_context * octx) {
+    if (octx->op != HTP_OP_MUL_MAT) return HTP_STATUS_INVAL_PARAMS;
     const struct htp_tensor * weight = octx->src[0], * input = octx->src[1], * output = octx->dst;
     if (!weight || !input || !output) return HTP_STATUS_INVAL_PARAMS;
     const unsigned bits = exl3_type_bits(weight->type), k = weight->ne[0], n = weight->ne[1];
@@ -134,28 +135,34 @@ int op_exl3_matmul(struct htp_ops_context * octx) {
         offset_row(output, rows - 1) + (uint64_t) n * 4 > output->size) return HTP_STATUS_INVAL_PARAMS;
     const struct htp_mm_kernel_params * params = (const struct htp_mm_kernel_params *) octx->kernel_params;
     if (!htp_ops_context_set_n_threads(octx, params->n_threads)) return HTP_STATUS_INVAL_PARAMS;
-    const size_t per_thread = 32768 + (size_t) rows * 512 + exl3_group_bytes(bits) + 128 + 512;
-    const size_t total = 131072 + (size_t) rows * k * 4 + per_thread * octx->n_threads;
+    const size_t capacity = exl3_row_chunk(bits, k, octx->n_threads, octx->ctx->vtcm_size);
+    if (!capacity) return HTP_STATUS_VTCM_TOO_SMALL;
+    const unsigned chunk = rows < capacity ? rows : (unsigned) capacity;
+    const size_t per_thread = 32768 + (size_t) chunk * 512 + exl3_group_bytes(bits) + 128 + 512;
+    const size_t total = 131072 + (size_t) chunk * k * 4 + per_thread * octx->n_threads;
     if (total > octx->ctx->vtcm_size) return HTP_STATUS_VTCM_TOO_SMALL;
     prepare_table();
     uint16_t * table = (uint16_t *) octx->ctx->vtcm_base;
     memcpy(table, mul1_table, 131072);
     float * xh = (float *) (table + 65536);
-    for (unsigned kb = 0; kb < k / 128; ++kb) {
-        const unsigned char * group = (const unsigned char *) (uintptr_t) weight->data + kb * exl3_group_bytes(bits);
-        const uint16_t * su = exl3_group_su(group, bits);
-        for (unsigned row = 0; row < rows; ++row) {
-            const unsigned char * src = (const unsigned char *) (uintptr_t) input->data + offset_row(input, row);
-            for (unsigned j = 0; j < 128; ++j) {
-                float value;
-                if (element == 4) memcpy(&value, src + (kb * 128 + j) * 4, 4);
-                else { uint16_t h; memcpy(&h, src + (kb * 128 + j) * 2, 2); value = half_value(&h); }
-                xh[row * k + kb * 128 + j] = value * half_value(su + j);
+    for (unsigned first_row = 0; first_row < rows; first_row += chunk) {
+        const unsigned active_rows = rows - first_row < chunk ? rows - first_row : chunk;
+        for (unsigned kb = 0; kb < k / 128; ++kb) {
+            const unsigned char * group = (const unsigned char *) (uintptr_t) weight->data + kb * exl3_group_bytes(bits);
+            const uint16_t * su = exl3_group_su(group, bits);
+            for (unsigned row = 0; row < active_rows; ++row) {
+                const unsigned char * src = (const unsigned char *) (uintptr_t) input->data + offset_row(input, first_row + row);
+                for (unsigned j = 0; j < 128; ++j) {
+                    float value;
+                    if (element == 4) memcpy(&value, src + (kb * 128 + j) * 4, 4);
+                    else { uint16_t h; memcpy(&h, src + (kb * 128 + j) * 2, 2); value = half_value(&h); }
+                    xh[row * k + kb * 128 + j] = value * half_value(su + j);
+                }
+                had128(xh + row * k + kb * 128);
             }
-            had128(xh + row * k + kb * 128);
         }
+        struct exl3_task task = {octx, bits, k, n, active_rows, first_row, per_thread, table, xh, (unsigned char *) (xh + (size_t) chunk * k)};
+        if (!work_queue_run(octx->ctx->work_queue, exl3_worker, &task, octx->n_threads)) return HTP_STATUS_INTERNAL_ERR;
     }
-    struct exl3_task task = {octx, bits, k, n, rows, per_thread, table, xh, (unsigned char *) (xh + (size_t) rows * k)};
-    if (!work_queue_run(octx->ctx->work_queue, exl3_worker, &task, octx->n_threads)) return HTP_STATUS_INTERNAL_ERR;
     return HTP_STATUS_OK;
 }

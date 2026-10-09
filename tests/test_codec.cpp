@@ -1,4 +1,5 @@
 #include "exl3_codec.h"
+#include "exl3-block.h"
 
 #include <cmath>
 #include <iostream>
@@ -11,6 +12,19 @@ static void check(bool condition, const char * message) {
 
 int main() {
     try {
+        check(exl3_row_chunk(4, 6144, 4, 8 * 1024 * 1024) == 32, "FFN row chunk capacity");
+        check(exl3_row_chunk(4, 2048, 0, 8 * 1024 * 1024) == 0, "Reject no workers");
+        check(exl3_row_chunk(4, 0, 4, 8 * 1024 * 1024) == 0, "Reject no input dimension");
+        for (unsigned bits : {4u, 6u, 8u}) for (size_t k : {128u, 2048u, 6144u, 65536u}) {
+            for (unsigned threads = 1; threads <= 4; ++threads) for (size_t budget : {131072u, 262144u, 4194304u, 8388608u}) {
+                const size_t chunk = exl3_row_chunk(bits, k, threads, budget);
+                check(chunk <= 32, "Row chunk bound");
+                if (chunk) {
+                    const size_t needed = 131072 + chunk * k * 4 + threads * (32768 + chunk * 512 + exl3_group_bytes(bits) + 640);
+                    check(needed <= budget, "Row chunk fits VTCM");
+                }
+            }
+        }
         for (unsigned bits = 0; bits < 65536; ++bits) {
             if ((bits & 0x7c00) != 0x7c00) {
                 check(exl3::float_to_half(exl3::half_to_float(uint16_t(bits))) == bits, "FP16 roundtrip");
@@ -42,7 +56,7 @@ int main() {
         try { exl3::decode_inner_slice(packed, 16, 16, 16, 16, 4, exl3::Codebook::mul1, tile); }
         catch (const std::invalid_argument &) { rejected = true; }
         check(rejected, "Reject out-of-bounds column slice");
-        std::cout << "PASS: FP16 exhaustive roundtrip, rounding, H128, integer bitrate validation\n";
+        std::cout << "PASS: FP16 roundtrip, rounding, H128, bitrate validation, bounded VTCM row chunks\n";
         return 0;
     } catch (const std::exception & error) {
         std::cerr << error.what() << '\n';

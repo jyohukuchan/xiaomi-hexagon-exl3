@@ -143,7 +143,7 @@ index 20c7202..7fe73a2 100644
              -DPREBUILT_LIB_DIR="toolv19_${V}")
      list(APPEND HTP_SKELS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so)
 diff --git a/ggml/src/ggml-hexagon/ggml-hexagon.cpp b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
-index f3ca731..a230ecf 100644
+index f3ca731..3bb4f15 100644
 --- a/ggml/src/ggml-hexagon/ggml-hexagon.cpp
 +++ b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
 @@ -76,6 +76,7 @@
@@ -154,7 +154,17 @@ index f3ca731..a230ecf 100644
  
  using intvec  = std::vector<int>;
  using uintvec = std::vector<unsigned int>;
-@@ -4507,6 +4508,7 @@ static bool ggml_hexagon_precompute_allreduce_params(
+@@ -3642,6 +3643,9 @@ struct ggml_hexagon_opbatch {
+         const ggml_tensor * src0 = last_node.src0();
+         const ggml_tensor * src1 = last_node.src1();
+ 
++        // The EXL3 kernel does not implement the fused residual add.
++        if (exl3_type_bits(src0->type)) return false;
++
+         if (src2->type != GGML_TYPE_F32) return false;
+ 
+         const struct htp_mm_kernel_params * orig_kparams = (const struct htp_mm_kernel_params *) last_node.kernel_params;
+@@ -4507,6 +4511,7 @@ static bool ggml_hexagon_precompute_allreduce_params(
      struct htp_allreduce_kernel_params * kparams
  ) {
      memset(kparams, 0, sizeof(*kparams));
@@ -162,7 +172,7 @@ index f3ca731..a230ecf 100644
      kparams->rank         = (int32_t) rank;
      kparams->n_ranks      = (int32_t) n_ranks;
      kparams->is_row_bcast = (has_add && is_row_bcast) ? 1 : 0;
-@@ -5728,6 +5730,26 @@ static void ggml_hexagon_precompute_matmul_params_impl(
+@@ -5728,6 +5733,29 @@ static void ggml_hexagon_precompute_matmul_params_impl(
  ) {
      memset(kparams, 0, sizeof(*kparams));
  
@@ -170,12 +180,15 @@ index f3ca731..a230ecf 100644
 +        if (src0->ne[0] < 128 || src0->ne[0] > 65536 || src0->ne[1] < 128 || src0->ne[1] > 1048576) return;
 +        uint64_t rows = 1;
 +        for (int d = 1; d < 4; ++d) {
-+            if (src1->ne[d] <= 0 || src1->ne[d] > 1024 || rows > 1024u / src1->ne[d]) return;
++            if (src1->ne[d] <= 0 || src1->ne[d] > 1024 || rows > 1024u / (uint64_t) src1->ne[d]) return;
 +            rows *= src1->ne[d];
 +        }
 +        const unsigned bits = exl3_type_bits(src0->type);
 +        if ((uint64_t) (src0->ne[0] / 128) * (src0->ne[1] / 128) * exl3_group_bytes(bits) > UINT32_MAX) return;
 +        const uint32_t nth = (uint32_t) std::min<int64_t>(sess->n_hvx, src0->ne[1] / 128);
++        const size_t capacity = exl3_row_chunk(bits, src0->ne[0], nth, sess->vtcm_size);
++        if (!capacity) return;
++        rows = std::min<uint64_t>(rows, capacity);
 +        const uint64_t per_thread = 32768 + rows * 512 + exl3_group_bytes(bits) + 640;
 +        const uint64_t total = 131072 + rows * src0->ne[0] * 4 + nth * per_thread;
 +        if (nth > 0 && total <= sess->vtcm_size) {
@@ -189,7 +202,7 @@ index f3ca731..a230ecf 100644
      const int ne00 = src0->ne[0];
      const int ne01 = src0->ne[1];
      const int ne02 = src0->ne[2];
-@@ -6903,6 +6925,13 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
+@@ -6903,6 +6931,13 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
      if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) {
          return false;
      }
@@ -393,10 +406,10 @@ index 6cc0b20..2b3b58b 100644
                  {
                      LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index c44189c..95a3672 100644
+index c44189c..7ff8bc9 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -289,6 +289,12 @@ endif()
+@@ -289,6 +289,15 @@ endif()
  
  # TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
  llama_build(test-backend-ops.cpp)
@@ -405,6 +418,9 @@ index c44189c..95a3672 100644
 +    llama_build(${EXL3_ROOT}/tests/test-exl3-graph.cpp)
 +    unset(LLAMA_TEST_NAME)
 +    target_include_directories(test-exl3-graph PRIVATE ${EXL3_ROOT}/include)
++    add_executable(trace_runtime ${EXL3_ROOT}/tools/trace_runtime.cpp)
++    target_link_libraries(trace_runtime PRIVATE llama ggml ggml-base)
++    install(TARGETS trace_runtime RUNTIME DESTINATION bin)
 +endif()
  
  llama_build_and_test(test-tiled-mulmat.cpp)

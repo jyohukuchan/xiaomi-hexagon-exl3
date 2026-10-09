@@ -98,3 +98,11 @@ docker run --rm --volume C:\coding-local\xiaomi-hexagon-exl3:/workspace --workdi
 The patch is stored in the parent repository; the submodule stays pinned to its original upstream commit. An applied overlay makes its working directory dirty by design. `apply_runtime_patch.ps1` accepts an already applied patch and refuses conflicting edits.
 
 The `.hxgguf` file uses project-specific weight type IDs and must be run with this patched runtime. Its payload remains below 5 bpw. The integration is under investigation: consult `docs/validation/runtime-integration.md` before interpreting generated output or speed as a completed milestone.
+
+### Graph tracing
+
+The runtime build installs `trace_runtime`. It accepts a model path, an empty output directory, the number of offloaded layers, a stop tensor name, and integer token IDs. For example, run token 100 with `l_out-23` and offloaded layers `0` (CPU reference) or `99` (HTP). It writes FP32 residual streams and shape/stride metadata. A stop request stops collection; a backend may still finish operations already submitted in its batch.
+
+`tests/compare_runtime_trace.py CPU_DIRECTORY HTP_DIRECTORY` compares all 24 contiguous residual streams. `tests/trace_reference.py MODEL OUTPUT_DIRECTORY 100 --all-layers` runs in the CUDA quantizer container with the shared quantized head as input embedding. Compare it with `--cuda-reference --limit 0.0005`; this tolerance includes differing FP16/FP32/BF16 intermediate arithmetic and is not a bit-exact gate.
+
+For a completion benchmark using the model's already formatted translation prompt, pass `--no-conversation --no-display-prompt --temp 0 --no-warmup -c 8192 -b 128 -ub 4 -n 32 -ngl 99`. Without `--no-conversation`, the runtime can apply a second chat template and the prompt no longer matches the CUDA reference. Profiling/tracing runs are separate from throughput measurements.
