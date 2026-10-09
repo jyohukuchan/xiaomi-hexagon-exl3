@@ -15,6 +15,8 @@ uint16_t decode_codebook(uint16_t state, Codebook codebook);
 void decode_tile(const uint16_t * packed, unsigned bits, Codebook codebook, uint16_t * row_major);
 void decode_inner(const uint16_t * packed, size_t k, size_t n, unsigned bits, Codebook codebook,
                   uint16_t * output);
+void decode_inner_slice(const uint16_t * packed, size_t k, size_t n, size_t first_column,
+                        size_t column_count, unsigned bits, Codebook codebook, uint16_t * output);
 
 // In-place orthonormal H128 on each consecutive group of 128 values.
 void hadamard128(float * values, size_t count);
@@ -22,5 +24,8 @@ void hadamard128(float * values, size_t count);
 // Original-basis matrix: diag(suh) H128 W_hat H128 diag(svh), laid out as [k,n].
 void reconstruct(const uint16_t * packed, const uint16_t * suh, const uint16_t * svh,
                  size_t k, size_t n, unsigned bits, Codebook codebook, uint16_t * output);
+void reconstruct_slice(const uint16_t * packed, const uint16_t * suh, const uint16_t * svh,
+                       size_t k, size_t n, size_t first_column, size_t column_count,
+                       unsigned bits, Codebook codebook, uint16_t * output);
 
 } // namespace exl3

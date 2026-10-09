@@ -54,8 +54,18 @@ int main(int argc, char ** argv) {
         }
         const double nmse = norm ? mse / norm : mse;
         const float relative = magnitude ? max_error / magnitude : max_error;
+        std::vector<uint16_t> slice(k * 128);
+        for (size_t first = 0; first < n; first += 128) {
+            exl3::reconstruct_slice(packed.data(), suh.data(), svh.data(), k, n, first, 128, bits,
+                                    static_cast<exl3::Codebook>(cb), slice.data());
+            for (size_t row = 0; row < k; ++row) for (size_t col = 0; col < 128; ++col) {
+                if (slice[row * 128 + col] != output[row * n + first + col]) {
+                    throw std::runtime_error("Embedding slice differs from full reconstruction");
+                }
+            }
+        }
         std::cout << "k=" << k << " n=" << n << " bits=" << bits << " cb=" << cb
-                  << " inner_bit_exact=yes max_relative=" << relative << " nmse=" << nmse << '\n';
+                  << " inner_bit_exact=yes slices_bit_exact=yes max_relative=" << relative << " nmse=" << nmse << '\n';
         return relative <= 0.002f && nmse <= 1e-6 ? 0 : 1;
     } catch (const std::exception & error) {
         std::cerr << error.what() << '\n'; return 1;

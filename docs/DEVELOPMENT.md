@@ -74,3 +74,13 @@ python tools\package_model.py models\index-translate-2b-exl3-4 `
 ```
 
 The deployment manifest aliases input embedding lookup to the original-basis columns of the quantized output head. This preserves tied weights without storing a second embedding matrix. Because the upstream intermediate uses a separate unquantized input embedding, this changes the input embedding precision to the head's precision; end-to-end translation evaluation must use the shared-head deployment representation. The prepared artifact needs the project loader to resolve this alias and is not directly loadable by an unmodified upstream HF loader.
+
+The native `exl3_model_info` utility opens that artifact and optionally reconstructs a token embedding:
+
+```sh
+build-codec-native/exl3_model_info models/index-translate-2b-hexagon 124160
+```
+
+The Windows Android build script deploys this utility as well. It can compare the embedding with a real-model CUDA fixture by passing the fixture path and its column index after the token ID.
+
+The converter entry point applies `tools/refit_scales.py` at runtime. This adapter keeps upstream's Hessian-metric scale fitting while chunking large temporary operations. Its CUDA parity check is `tests/test_refit_cuda.py`; it is separate from the lightweight CPU CI suite.

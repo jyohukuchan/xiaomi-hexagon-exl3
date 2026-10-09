@@ -5,6 +5,7 @@ The EXL3 decoding equations, tensor-core tile layout, and H128 reconstruction in
 - `exllamav3/exllamav3_ext/quant/codebook.cuh`
 - `exllamav3/exllamav3_ext/quant/exl3_dq.cuh`
 - `exllamav3/exllamav3_ext/quant/reconstruct.cu`
+- `tools/refit_scales.py` ports the scale-refit equations from `exllamav3/modules/quant/exl3_lib/quantize.py` and bounds the large tensor operations by column chunks.
 
 Copyright (c) 2025 Turboderp. The original MIT license is included in `licenses/exllamav3.txt`.
 

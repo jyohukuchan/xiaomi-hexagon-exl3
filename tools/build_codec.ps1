@@ -22,10 +22,10 @@ if ($Push) {
     $adb = 'C:\Android\platform-tools\platform-tools-latest-windows\platform-tools\adb.exe'
     & $adb -s $Serial shell mkdir -p /data/local/tmp/xiaomi-hexagon-exl3
     if ($LASTEXITCODE -ne 0) { throw 'Could not create device directory' }
-    foreach ($binary in @('exl3_verify', 'test_codec')) {
+    foreach ($binary in @('exl3_verify', 'test_codec', 'exl3_model_info', 'test_model_reader')) {
         & $adb -s $Serial push "$repoPath\$buildPath\$binary" /data/local/tmp/xiaomi-hexagon-exl3/
         if ($LASTEXITCODE -ne 0) { throw "Could not deploy $binary" }
     }
-    & $adb -s $Serial shell 'cd /data/local/tmp/xiaomi-hexagon-exl3 && chmod 755 test_codec exl3_verify && ./test_codec'
+    & $adb -s $Serial shell 'cd /data/local/tmp/xiaomi-hexagon-exl3 && chmod 755 test_codec exl3_verify exl3_model_info test_model_reader && ./test_codec && TMPDIR=/data/local/tmp/xiaomi-hexagon-exl3 ./test_model_reader'
     if ($LASTEXITCODE -ne 0) { throw 'Device codec test failed' }
 }

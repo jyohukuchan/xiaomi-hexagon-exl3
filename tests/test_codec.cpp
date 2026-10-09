@@ -38,6 +38,10 @@ int main() {
         try { exl3::decode_tile(packed, 0, exl3::Codebook::mul1, tile); }
         catch (const std::invalid_argument &) { rejected = true; }
         check(rejected, "Reject invalid bitrate");
+        rejected = false;
+        try { exl3::decode_inner_slice(packed, 16, 16, 16, 16, 4, exl3::Codebook::mul1, tile); }
+        catch (const std::invalid_argument &) { rejected = true; }
+        check(rejected, "Reject out-of-bounds column slice");
         std::cout << "PASS: FP16 exhaustive roundtrip, rounding, H128, integer bitrate validation\n";
         return 0;
     } catch (const std::exception & error) {

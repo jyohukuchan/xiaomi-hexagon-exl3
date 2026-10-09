@@ -114,14 +114,23 @@ static void validate_shape(size_t k, size_t n, size_t multiple) {
 
 void decode_inner(const uint16_t * packed, size_t k, size_t n, unsigned bits, Codebook codebook,
                   uint16_t * output) {
+    decode_inner_slice(packed, k, n, 0, n, bits, codebook, output);
+}
+
+void decode_inner_slice(const uint16_t * packed, size_t k, size_t n, size_t first_column,
+                        size_t column_count, unsigned bits, Codebook codebook, uint16_t * output) {
     validate(bits, codebook);
     validate_shape(k, n, 16);
+    if (!column_count || first_column % 16 || column_count % 16 ||
+        first_column > n || column_count > n - first_column) {
+        throw std::invalid_argument("Invalid EXL3 column slice");
+    }
     uint16_t tile[256];
     for (size_t rk = 0; rk < k / 16; ++rk) {
-        for (size_t cn = 0; cn < n / 16; ++cn) {
-            decode_tile(packed + (rk * (n / 16) + cn) * 16 * bits, bits, codebook, tile);
+        for (size_t cn = 0; cn < column_count / 16; ++cn) {
+            decode_tile(packed + (rk * (n / 16) + first_column / 16 + cn) * 16 * bits, bits, codebook, tile);
             for (size_t row = 0; row < 16; ++row) {
-                std::memcpy(output + (rk * 16 + row) * n + cn * 16, tile + row * 16, 32);
+                std::memcpy(output + (rk * 16 + row) * column_count + cn * 16, tile + row * 16, 32);
             }
         }
     }
@@ -151,15 +160,24 @@ void hadamard128(float * values, size_t count) {
 
 void reconstruct(const uint16_t * packed, const uint16_t * suh, const uint16_t * svh,
                  size_t k, size_t n, unsigned bits, Codebook codebook, uint16_t * output) {
+    reconstruct_slice(packed, suh, svh, k, n, 0, n, bits, codebook, output);
+}
+
+void reconstruct_slice(const uint16_t * packed, const uint16_t * suh, const uint16_t * svh,
+                       size_t k, size_t n, size_t first_column, size_t column_count,
+                       unsigned bits, Codebook codebook, uint16_t * output) {
     validate_shape(k, n, 128);
-    decode_inner(packed, k, n, bits, codebook, output);
+    if (first_column % 128 || column_count % 128) {
+        throw std::invalid_argument("H128 slices must align to 128 columns");
+    }
+    decode_inner_slice(packed, k, n, first_column, column_count, bits, codebook, output);
     float block[128 * 128];
     float column[128];
     for (size_t rk = 0; rk < k; rk += 128) {
-        for (size_t cn = 0; cn < n; cn += 128) {
+        for (size_t cn = 0; cn < column_count; cn += 128) {
             for (size_t row = 0; row < 128; ++row) {
                 for (size_t col = 0; col < 128; ++col) {
-                    block[row * 128 + col] = half_to_float(output[(rk + row) * n + cn + col]);
+                    block[row * 128 + col] = half_to_float(output[(rk + row) * column_count + cn + col]);
                 }
             }
             hadamard128(block, 128 * 128);
@@ -169,8 +187,8 @@ void reconstruct(const uint16_t * packed, const uint16_t * suh, const uint16_t *
                 }
                 hadamard128(column, 128);
                 for (size_t row = 0; row < 128; ++row) {
-                    const float value = column[row] * half_to_float(suh[rk + row]) * half_to_float(svh[cn + col]);
-                    output[(rk + row) * n + cn + col] = float_to_half(value);
+                    const float value = column[row] * half_to_float(suh[rk + row]) * half_to_float(svh[first_column + cn + col]);
+                    output[(rk + row) * column_count + cn + col] = float_to_half(value);
                 }
             }
         }

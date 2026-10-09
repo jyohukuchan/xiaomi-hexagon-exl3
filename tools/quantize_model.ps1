@@ -2,7 +2,7 @@ param([switch]$Resume, [int]$CalibrationRows = 32, [int]$CalibrationColumns = 10
 $ErrorActionPreference = 'Stop'
 $repoPath = Split-Path -Parent $PSScriptRoot
 $docker = 'C:\Program Files\Docker\Docker\resources\bin\docker.exe'
-$conversionArgs = @('python', '-u', 'convert.py', '-w', '/workspace/models/quant-work')
+$conversionArgs = @('python', '-u', '/workspace/tools/quantize_entry.py', '-w', '/workspace/models/quant-work')
 if ($Resume) {
     $conversionArgs += '-r'
 } else {
