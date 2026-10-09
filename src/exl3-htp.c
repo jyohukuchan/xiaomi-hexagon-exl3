@@ -14,10 +14,14 @@
 #include <math.h>
 #include <string.h>
 
-static float half_value(const uint16_t * ptr) {
-    _Float16 h;
-    memcpy(&h, ptr, 2);
-    return (float) h;
+static void scale128(float * dst, const unsigned char * src, unsigned element, const uint16_t * scales) {
+    for (unsigned col = 0; col < 128; col += 64) {
+        const HVX_VectorPair scale = hvx_vec_f16_to_f32(hvx_vmemu(scales + col));
+        const HVX_VectorPair value = element == 2 ? hvx_vec_f16_to_f32(hvx_vmemu(src + col * 2)) :
+            Q6_W_vcombine_VV(hvx_vmemu(src + (col + 32) * 4), hvx_vmemu(src + col * 4));
+        hvx_vmemu(dst + col) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_V_lo_W(value), Q6_V_lo_W(scale)));
+        hvx_vmemu(dst + col + 32) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_V_hi_W(value), Q6_V_hi_W(scale)));
+    }
 }
 
 static void had128(float * x) {
@@ -134,7 +138,7 @@ static void exl3_worker(unsigned nth, unsigned ith, void * opaque) {
         for (unsigned row = 0; row < task->rows; ++row) {
             had128(result + row * 128);
             float * dst = (float *) ((uintptr_t) output->data + offset_row(output, task->first_row + row)) + nb * 128;
-            for (unsigned j = 0; j < 128; ++j) dst[j] = result[row * 128 + j] * half_value(sv + j);
+            scale128(dst, (const unsigned char *) (result + row * 128), 4, sv);
         }
         htp_trace_event_stop(trace, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) nb);
     }
@@ -186,12 +190,7 @@ int op_exl3_matmul(struct htp_ops_context * octx) {
             const uint16_t * su = exl3_group_su(group, bits);
             for (unsigned row = 0; row < active_rows; ++row) {
                 const unsigned char * src = (const unsigned char *) (uintptr_t) input->data + offset_row(input, first_row + row);
-                for (unsigned j = 0; j < 128; ++j) {
-                    float value;
-                    if (element == 4) memcpy(&value, src + (kb * 128 + j) * 4, 4);
-                    else { uint16_t h; memcpy(&h, src + (kb * 128 + j) * 2, 2); value = half_value(&h); }
-                    xh[row * k + kb * 128 + j] = value * half_value(su + j);
-                }
+                scale128(xh + row * k + kb * 128, src + kb * 128 * element, element, su);
                 had128(xh + row * k + kb * 128);
             }
         }
