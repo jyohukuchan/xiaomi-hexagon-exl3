@@ -429,7 +429,7 @@ diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
 index c44189c..17e866d 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -289,6 +289,22 @@ endif()
+@@ -289,6 +289,25 @@ endif()
  
  # TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
  llama_build(test-backend-ops.cpp)
@@ -441,6 +441,9 @@ index c44189c..17e866d 100644
 +    add_executable(trace_runtime ${EXL3_ROOT}/tools/trace_runtime.cpp)
 +    target_link_libraries(trace_runtime PRIVATE llama ggml ggml-base)
 +    install(TARGETS trace_runtime RUNTIME DESTINATION bin)
++    add_executable(context_probe ${EXL3_ROOT}/tools/context_probe.cpp)
++    target_link_libraries(context_probe PRIVATE llama ggml ggml-base)
++    install(TARGETS context_probe RUNTIME DESTINATION bin)
 +    add_executable(test-hexagon-attention ${EXL3_ROOT}/tests/test-hexagon-attention.cpp)
 +    target_link_libraries(test-hexagon-attention PRIVATE ggml ggml-base)
 +    if(LLAMA_BUILD_SERVER)
