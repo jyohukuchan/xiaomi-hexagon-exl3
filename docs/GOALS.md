@@ -26,10 +26,11 @@ The initial context target is 8,192 tokens, followed by 32,768 after the decode 
 ## KV and recurrent state policy
 
 - Implement cache storage behind a format-independent paged-cache interface.
-- Use llama.cpp-compatible Q8_0 K/V as the bring-up and accuracy-reference format because the current Snapdragon backend already executes Q8_0 Flash Attention.
-- Keep FP16 as a diagnostic reference, not the production default.
-- Prototype ExLlamaV3-style rotated arbitrary-bit cache storage after end-to-end bring-up. Start evaluation with K=6 bits and V=4 bits, then promote either side if translation regression exceeds the quality budget.
-- Select the production default from end-to-end measurements of translation quality, sustained decode speed, and total cache memory—not compression ratio alone.
+- Use FP16 K/V for bring-up and the first end-to-end implementation.
+- Do not allow KV-cache quantization work to block model execution, correctness, batching, or the 15 tokens/second decode target.
+- Revisit KV-cache quantization only after the model and API operate reliably and have an end-to-end performance baseline.
+- When that milestone is reached, compare llama.cpp-compatible Q8_0 against ExLlamaV3-style rotated arbitrary-bit storage using translation quality, sustained decode speed, and total cache memory.
+- Keep the paged-cache interface format-independent so cache quantization can be added without redesigning request scheduling or attention state ownership.
 
 Index-Translate-2B contains six full-attention layers and eighteen linear-attention layers. Only the full-attention layers grow their K/V storage with context length; the linear-attention layers use fixed-size recurrent state per active sequence.
 

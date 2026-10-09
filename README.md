@@ -35,7 +35,7 @@ Additional observations:
 - Batch 512 selects HMX kernels
 - A short sustained load reduced Q4_0 batch-512 throughput from 6.61 to 5.70 TFLOPS as the NPU thermal sensors heated up
 
-The single-request decode target is **15 tokens/second or faster** on the Xiaomi 14 Ultra. See [project goals](docs/GOALS.md) for the current acceptance criteria and cache policy.
+The single-request decode target is **15 tokens/second or faster** on the Xiaomi 14 Ultra. Initial bring-up uses an FP16 KV cache; cache quantization is deliberately deferred until end-to-end inference is reliable. See [project goals](docs/GOALS.md) for the current acceptance criteria and cache policy.
 
 See the [full benchmark report](docs/benchmarks/2026-10-09-xiaomi-14-ultra.md) for methodology and power-measurement limitations.
 
