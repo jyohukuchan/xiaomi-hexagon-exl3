@@ -27,7 +27,9 @@ The residual-fusion fix restored the expected Japanese-to-English translation on
 
 > This is a test of the translation engine that runs on the smartphone's NPU. It can translate without a network connection.
 
-This matches upstream CUDA, including the CUDA run with shared 6-bit input embeddings. This first correct run still used the 24 CPU FFN down-projection fallbacks: prompt 1.03 tokens/s (56 tokens), decode 0.23 tokens/s (25 decode runs). The all-EXL3-on-NPU follow-up is measured separately. Neither run is evidence of the 15 tokens/s target.
+This matches upstream CUDA, including the CUDA run with shared 6-bit input embeddings. The first correct run still used the 24 CPU FFN down-projection fallbacks: prompt 1.03 tokens/s (56 tokens), decode 0.23 tokens/s (25 decode runs).
+
+After row chunking put all 151 EXL3 matrices on the NPU, the same raw prompt produced the same complete translation at 1.11 prompt tokens/s (56 tokens / 50,536.31 ms) and 0.24585 decode tokens/s (25 runs / 101,687.11 ms). Conditions: stock phone, FP16 K/V, context capacity 8,192, actual initial prompt 56 tokens, logical batch 128, microbatch 4, eight CPU threads, temperature zero, no warmup, no conversation wrapping. The requested output cap was 32 tokens; generation ended at EOS. This is a short correctness baseline, not a sustained 8k-context run. The 15 tokens/s gate is not met.
 
 ## Whole-graph and batch regression checks
 
@@ -36,3 +38,5 @@ This matches upstream CUDA, including the CUDA run with shared 6-bit input embed
 - The first all-EXL3-on-NPU single-token profile totals 4.029 seconds in 151 EXL3 kernels, including 1.100 seconds for the shared 6-bit vocabulary head. Tracing and profiling are diagnostic runs, not decode-throughput measurements.
 
 The remaining gates are translation regression coverage, continuous batching/API, sustained throughput, and context-size validation. The current HVX decoder/matrix kernel is a correctness baseline; major performance work remains.
+
+The single-token trace reports 378.91 MiB of CPU model buffers and 1,078.13 MiB of HTP model buffers. The tied head is one serialized tensor but currently has CPU and device-side runtime copies for embedding lookup/output projection. Serialized bpw does not describe this extra runtime memory. The completion run also reports an unexpectedly large CPU scratch allocation (378.94 MiB instead of the reserved estimate); this needs investigation during memory/performance optimization.

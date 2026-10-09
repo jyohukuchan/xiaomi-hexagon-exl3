@@ -5,7 +5,7 @@ Experimental inference engine work for running EXL3-quantized language models on
 The first end-to-end target is [IndexTeam/Index-Translate-2B](https://huggingface.co/IndexTeam/Index-Translate-2B), with request batching and an OpenAI-compatible HTTP API. Most weights will use approximately 4 bpw, while precision-sensitive tensors may use higher precision provided the complete serialized weight payload remains at or below 5.0 average bits per parameter.
 
 > [!IMPORTANT]
-> This repository currently contains EXL3 codec and Hexagon matrix-operation prototypes. End-to-end model inference and the API are under development. See [milestones](docs/MILESTONES.md) for the verified status.
+> Native EXL3 inference now generates the reference Japanese-to-English translation on the phone with FP16 KV and all 151 packed-weight matrices on Hexagon. The initial correct decode rate is only 0.25 tokens/s, far below the 15 tokens/s target. Batching/API, performance, and broader regression validation remain under development. See [milestones](docs/MILESTONES.md) for the verified status.
 
 ## Validated hardware
 
