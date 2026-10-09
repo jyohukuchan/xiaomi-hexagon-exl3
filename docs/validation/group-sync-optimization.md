@@ -27,3 +27,5 @@ The approximately 9% improvement is only a short-run observation. It does not me
 ## Rejected small-table candidate
 
 A 1,024-entry FP16 table indexed by the exact product-byte sum also matches all 65,536 states. A standalone VTCM microbenchmark repeats each vector 64 times with volatile input and output accesses to prevent elimination. The arithmetic path takes 5,088,912 cycles and the table path 6,761,567 cycles in the measured run. The table path is approximately 33% slower and is not selected by the runtime. Both modes remain in the standalone probe to reproduce the comparison; no table is allocated by the model matrix kernel.
+
+An additional four-bit prototype permuted two adjacent 16x16 tiles into contiguous HMX-layout stores, removing scatters for those tiles. Both backends passed the same 21 matrix cases, and all 24 residual streams remained bit-identical. Nevertheless, its full profile was 621,778 microseconds, and its isolated translation decode took 16,436.45 ms / 25 runs (1.52 tokens/s). No speed advantage over group-level synchronization was demonstrated. The prototype is reverted; the runtime retains the tested group-level scatter path.
