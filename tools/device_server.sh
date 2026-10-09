@@ -3,6 +3,7 @@ set -eu
 cd /data/local/tmp/xiaomi-hexagon-exl3
 export LD_LIBRARY_PATH="$PWD/runtime/lib"
 export ADSP_LIBRARY_PATH="$PWD/runtime/lib"
+export GGML_HEXAGON_EXL3_HMX="${GGML_HEXAGON_EXL3_HMX:-1}"
 if [ ! -r device-api.key ]; then
     echo "Missing local API key: deploy device-api.key with mode 600" >&2
     exit 1

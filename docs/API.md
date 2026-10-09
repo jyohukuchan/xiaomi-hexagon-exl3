@@ -49,6 +49,8 @@ for chunk in stream:
 
 The default chat template disables thinking for translation. Raw `/v1/completions` prompts must already include the model's template; `/v1/chat/completions` accepts ordinary messages and applies it once. Streaming uses per-request stable IDs/timestamps, a separate empty-choices usage event when requested, then `[DONE]`, following the [Chat Completions streaming schema](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events) and [Completions reference](https://developers.openai.com/api/reference/resources/completions/methods/create).
 
+The service selects the [validated HMX matrix path](validation/hmx-bringup.md) by default. `GGML_HEXAGON_EXL3_HMX=0` selects the HVX fallback when launching directly on the device. KV remains FP16 in both paths; HMX uses FP16 activations/partial results for its matrix arithmetic.
+
 ## Verification
 
 Generate the eight public regression references in the pinned CUDA converter container:

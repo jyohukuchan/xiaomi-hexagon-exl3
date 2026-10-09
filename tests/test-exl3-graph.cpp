@@ -71,10 +71,14 @@ int main(int argc, char ** argv) {
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         ggml_backend_tensor_get(added, actual.data(), 0, actual.size() * 4);
         double error = 0, norm = 0;
+        size_t diagnostics = 0;
         for (size_t b = 0; b < batch; ++b) for (size_t c = 0; c < n; ++c) {
             double expected = residual_data[b * n + c];
             for (size_t r = 0; r < k; ++r) expected += double(input[b * k + r]) * ggml_fp16_to_fp32(original[r * n + c]);
             const double delta = actual[b * n + c] - expected;
+            if ((!std::isfinite(delta) || std::abs(delta) > 0.1) && diagnostics++ < 12) {
+                std::cout << "mismatch row=" << b << " col=" << c << " actual=" << actual[b * n + c] << " expected=" << expected << '\n';
+            }
             error += delta * delta; norm += expected * expected;
         }
         const double nmse = norm ? error / norm : error;

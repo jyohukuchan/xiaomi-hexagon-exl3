@@ -42,7 +42,19 @@ static inline HVX_Vector exl3_hvx_lookup(HVX_Vector states, const uint16_t * tab
     return Q6_Vh_vdeal_Vh(*gathered);
 }
 static inline void exl3_hvx_scatter(uint16_t * output, HVX_Vector offsets, HVX_Vector values) {
-#ifdef EXL3_HVX_MATRIX_OUTPUT
+#ifdef EXL3_HVX_HMX_OUTPUT
+    const HVX_Vector rows = Q6_Vuh_vlsr_VuhR(offsets, 5);
+    const HVX_Vector cols = Q6_V_vand_VV(offsets, Q6_V_vsplat_R(0x001f001f));
+    const HVX_Vector pair = Q6_Vh_vasl_VhR(Q6_Vuh_vlsr_VuhR(rows, 1), 7);
+    const HVX_Vector parity = Q6_Vh_vasl_VhR(Q6_V_vand_VV(rows, Q6_V_vsplat_R(0x00010001)), 1);
+    offsets = Q6_Vh_vadd_VhVh(pair, Q6_Vh_vadd_VhVh(Q6_Vh_vasl_VhR(cols, 1), parity));
+    Q6_vscatter_RMVhV((uint32_t) output, 1023, offsets, values);
+#elif defined(EXL3_HVX_TILE32_OUTPUT)
+    const HVX_Vector rows = Q6_Vuh_vlsr_VuhR(offsets, 5);
+    const HVX_Vector cols = Q6_V_vand_VV(offsets, Q6_V_vsplat_R(0x001f001f));
+    offsets = Q6_Vh_vadd_VhVh(Q6_Vh_vasl_VhR(rows, 6), cols);
+    Q6_vscatter_RMVhV((uint32_t) output, 1023, offsets, values);
+#elif defined(EXL3_HVX_MATRIX_OUTPUT)
     const HVX_Vector rows = Q6_Vuh_vlsr_VuhR(offsets, 5);
     const HVX_Vector cols = Q6_V_vand_VV(offsets, Q6_V_vsplat_R(0x001f001f));
     offsets = Q6_Vh_vadd_VhVh(Q6_Vh_vasl_VhR(rows, 8), cols);

@@ -27,8 +27,20 @@ int main() {
                 const size_t chunk = exl3_row_chunk(bits, k, threads, budget);
                 check(chunk <= 32, "Row chunk bound");
                 if (chunk) {
-                    const size_t needed = chunk * k * 4 + threads * (32768 + chunk * 512 + exl3_group_bytes(bits) + 640);
+                    const size_t needed = chunk * k * 4 + threads * exl3_thread_bytes(bits, chunk);
                     check(needed <= budget, "Row chunk fits VTCM");
+                }
+                const size_t extra = exl3_hmx_extra(k, threads);
+                if (extra < budget) {
+                    const size_t hmx_rows = exl3_row_chunk(bits, k, threads, budget - extra);
+                    if (hmx_rows) {
+                        const size_t prefix = exl3_hmx_prefix_bytes(k, hmx_rows);
+                        const size_t per_thread = exl3_hmx_thread_bytes(bits, hmx_rows);
+                        check(prefix + threads * per_thread <= budget, "HMX scratch fits VTCM");
+                        check(prefix % 2048 == 0 && per_thread % 2048 == 0, "HMX output alignment");
+                        check(exl3_hmx_activation_offset(k, hmx_rows) % 2048 == 0, "HMX activation alignment");
+                        check(per_thread - 8192 >= exl3_thread_bytes(bits, hmx_rows), "HMX output does not overlap decode scratch");
+                    }
                 }
             }
         }

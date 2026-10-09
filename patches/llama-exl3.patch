@@ -143,7 +143,7 @@ index 20c7202..7fe73a2 100644
              -DPREBUILT_LIB_DIR="toolv19_${V}")
      list(APPEND HTP_SKELS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so)
 diff --git a/ggml/src/ggml-hexagon/ggml-hexagon.cpp b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
-index f3ca731..6167170 100644
+index f3ca731..4a7c12b 100644
 --- a/ggml/src/ggml-hexagon/ggml-hexagon.cpp
 +++ b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
 @@ -76,6 +76,7 @@
@@ -182,7 +182,7 @@ index f3ca731..6167170 100644
          return false;
      }
  
-@@ -5728,6 +5734,29 @@ static void ggml_hexagon_precompute_matmul_params_impl(
+@@ -5728,6 +5734,39 @@ static void ggml_hexagon_precompute_matmul_params_impl(
  ) {
      memset(kparams, 0, sizeof(*kparams));
  
@@ -196,14 +196,24 @@ index f3ca731..6167170 100644
 +        const unsigned bits = exl3_type_bits(src0->type);
 +        if ((uint64_t) (src0->ne[0] / 128) * (src0->ne[1] / 128) * exl3_group_bytes(bits) > UINT32_MAX) return;
 +        const uint32_t nth = (uint32_t) std::min<int64_t>(sess->n_hvx, src0->ne[1] / 128);
-+        const size_t capacity = exl3_row_chunk(bits, src0->ne[0], nth, sess->vtcm_size);
++        const char * hmx_requested = getenv("GGML_HEXAGON_EXL3_HMX");
++        bool hmx = sess->n_hmx && (!hmx_requested || strcmp(hmx_requested, "1") == 0);
++        size_t extra = hmx ? exl3_hmx_extra(src0->ne[0], nth) : 0;
++        size_t capacity = extra < sess->vtcm_size ? exl3_row_chunk(bits, src0->ne[0], nth, sess->vtcm_size - extra) : 0;
++        if (hmx && !capacity) {
++            hmx = false;
++            extra = 0;
++            capacity = exl3_row_chunk(bits, src0->ne[0], nth, sess->vtcm_size);
++        }
 +        if (!capacity) return;
 +        rows = std::min<uint64_t>(rows, capacity);
-+        const uint64_t per_thread = 32768 + rows * 512 + exl3_group_bytes(bits) + 640;
-+        const uint64_t total = rows * src0->ne[0] * 4 + nth * per_thread;
++        const uint64_t per_thread = exl3_thread_bytes(bits, rows);
++        const uint64_t total = hmx ? exl3_hmx_prefix_bytes(src0->ne[0], rows) + nth * exl3_hmx_thread_bytes(bits, rows)
++                                   : rows * src0->ne[0] * 4 + nth * per_thread;
 +        if (nth > 0 && total <= sess->vtcm_size) {
 +            kparams->kernel_type = HTP_MM_KERNEL_EXL3;
 +            kparams->n_threads = nth;
++            kparams->pipeline = hmx;
 +            kparams->vtcm_size = (int32_t) total;
 +        }
 +        return;
@@ -212,7 +222,7 @@ index f3ca731..6167170 100644
      const int ne00 = src0->ne[0];
      const int ne01 = src0->ne[1];
      const int ne02 = src0->ne[2];
-@@ -6903,6 +6932,13 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
+@@ -6903,6 +6942,13 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
      if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) {
          return false;
      }
@@ -227,7 +237,7 @@ index f3ca731..6167170 100644
      switch (src0->type) {
          case GGML_TYPE_Q4_0:
 diff --git a/ggml/src/ggml-hexagon/htp-opnode.h b/ggml/src/ggml-hexagon/htp-opnode.h
-index 8ff3854..784c489 100644
+index 8ff3854..b2a41b4 100644
 --- a/ggml/src/ggml-hexagon/htp-opnode.h
 +++ b/ggml/src/ggml-hexagon/htp-opnode.h
 @@ -326,7 +326,9 @@ struct htp_opformat {
@@ -236,7 +246,7 @@ index 8ff3854..784c489 100644
              int32_t type = kparams->kernel_type;
 -            if (type == HTP_MM_KERNEL_HMX_2D || type == HTP_MM_KERNEL_HMX_F16_BATCHED) {
 +            if (type == HTP_MM_KERNEL_EXL3) {
-+                path = "exl3-hvx";
++                path = kparams->pipeline ? "exl3-hmx" : "exl3-hvx";
 +            } else if (type == HTP_MM_KERNEL_HMX_2D || type == HTP_MM_KERNEL_HMX_F16_BATCHED) {
                  path = "hmx-tiled";
              } else if (type == HTP_MM_KERNEL_HVX_F16_F16_VTCM || type == HTP_MM_KERNEL_HVX_F32_F32_VTCM ||
