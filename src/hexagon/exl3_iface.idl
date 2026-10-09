@@ -2,6 +2,7 @@
 #include "remote.idl"
 
 interface exl3_iface : remote_handle64 {
+    AEEResult codebook_hvx(in sequence<octet> states, rout sequence<octet> output, rout uint64 cycles);
     AEEResult decode(in uint32 bits, in uint32 codebook, in uint32 k, in uint32 n,
                      in sequence<octet> packed, rout sequence<octet> output,
                      rout uint64 cycles);

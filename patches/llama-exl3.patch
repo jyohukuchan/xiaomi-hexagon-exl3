@@ -143,7 +143,7 @@ index 20c7202..7fe73a2 100644
              -DPREBUILT_LIB_DIR="toolv19_${V}")
      list(APPEND HTP_SKELS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so)
 diff --git a/ggml/src/ggml-hexagon/ggml-hexagon.cpp b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
-index f3ca731..7144e58 100644
+index f3ca731..6167170 100644
 --- a/ggml/src/ggml-hexagon/ggml-hexagon.cpp
 +++ b/ggml/src/ggml-hexagon/ggml-hexagon.cpp
 @@ -76,6 +76,7 @@
@@ -200,7 +200,7 @@ index f3ca731..7144e58 100644
 +        if (!capacity) return;
 +        rows = std::min<uint64_t>(rows, capacity);
 +        const uint64_t per_thread = 32768 + rows * 512 + exl3_group_bytes(bits) + 640;
-+        const uint64_t total = 131072 + rows * src0->ne[0] * 4 + nth * per_thread;
++        const uint64_t total = rows * src0->ne[0] * 4 + nth * per_thread;
 +        if (nth > 0 && total <= sess->vtcm_size) {
 +            kparams->kernel_type = HTP_MM_KERNEL_EXL3;
 +            kparams->n_threads = nth;

@@ -108,13 +108,10 @@ int exl3_iface_decode(remote_handle64 handle, uint32 bits, uint32 cb, uint32 k, 
     return 0;
 }
 
-int exl3_iface_decode_hvx(remote_handle64 handle, uint32 bits, uint32 cb, uint32 k, uint32 n,
-        const unsigned char * packed, int packed_len, unsigned char * output, int output_len, uint64 * cycles) {
-    (void) handle;
-    if ((bits != 4 && bits != 6 && bits != 8) || cb > 2 || !k || !n || k % 16 || n % 16 ||
-        (uint64_t) k * n > 64 * 1024 * 1024 || packed_len != (int) ((uint64_t) k * n * bits / 8) ||
-        output_len != (int) ((uint64_t) k * n * 2)) return 2;
-    prepare_codebook(cb);
+struct hvx_resources { void * memory; unsigned context; };
+
+static int hvx_acquire(struct hvx_resources * resources) {
+    memset(resources, 0, sizeof(*resources));
     HAP_power_request_t power;
     memset(&power, 0, sizeof(power));
     power.type = HAP_power_set_HVX;
@@ -126,15 +123,52 @@ int exl3_iface_decode_hvx(remote_handle64 handle, uint32 bits, uint32 cb, uint32
     compute_res_attr_t attr;
     HAP_compute_res_attr_init(&attr);
     HAP_compute_res_attr_set_vtcm_param_v2(&attr, 256 * 1024, 256 * 1024, 256 * 1024);
-    unsigned context = HAP_compute_res_acquire(&attr, 1000000);
-    void * memory = NULL;
+    resources->context = HAP_compute_res_acquire(&attr, 1000000);
     unsigned size = 0;
-    if (!context || HAP_compute_res_attr_get_vtcm_ptr_v2(&attr, &memory, &size) || size < 256 * 1024) {
-        if (context) HAP_compute_res_release(context);
+    if (!resources->context || HAP_compute_res_attr_get_vtcm_ptr_v2(&attr, &resources->memory, &size) || size < 256 * 1024) {
+        if (resources->context) HAP_compute_res_release(resources->context);
         qurt_hvx_unlock();
         return 5;
     }
-    uint16_t * table = (uint16_t *) memory;
+    return 0;
+}
+
+static void hvx_release(struct hvx_resources * resources) {
+    HAP_compute_res_release(resources->context);
+    qurt_hvx_unlock();
+}
+
+int exl3_iface_codebook_hvx(remote_handle64 handle, const unsigned char * states, int states_len,
+        unsigned char * output, int output_len, uint64 * cycles) {
+    (void) handle;
+    if (!states || !output || !cycles || states_len < 128 || states_len > 131072 || states_len % 128 || states_len != output_len) return 2;
+    struct hvx_resources resources;
+    int status = hvx_acquire(&resources);
+    if (status) return status;
+    HVX_Vector * input = (HVX_Vector *) resources.memory;
+    HVX_Vector * result = input + 1;
+    const uint64_t start = qurt_get_core_pcycles();
+    for (int offset = 0; offset < states_len; offset += 128) {
+        memcpy(input, states + offset, 128);
+        *result = exl3_hvx_mul1(*input);
+        memcpy(output + offset, result, 128);
+    }
+    *cycles = qurt_get_core_pcycles() - start;
+    hvx_release(&resources);
+    return 0;
+}
+
+int exl3_iface_decode_hvx(remote_handle64 handle, uint32 bits, uint32 cb, uint32 k, uint32 n,
+        const unsigned char * packed, int packed_len, unsigned char * output, int output_len, uint64 * cycles) {
+    (void) handle;
+    if ((bits != 4 && bits != 6 && bits != 8) || cb > 2 || !k || !n || k % 16 || n % 16 ||
+        (uint64_t) k * n > 64 * 1024 * 1024 || packed_len != (int) ((uint64_t) k * n * bits / 8) ||
+        output_len != (int) ((uint64_t) k * n * 2)) return 2;
+    prepare_codebook(cb);
+    struct hvx_resources resources;
+    int status = hvx_acquire(&resources);
+    if (status) return status;
+    uint16_t * table = (uint16_t *) resources.memory;
     memcpy(table, codebooks[cb], 65536 * 2);
     uint16_t * tile = table + 65536;
     HVX_Vector * gathered = (HVX_Vector *) (tile + 128);
@@ -142,12 +176,11 @@ int exl3_iface_decode_hvx(remote_handle64 handle, uint32 bits, uint32 cb, uint32
     const uint64_t start = qurt_get_core_pcycles();
     for (unsigned rk = 0; rk < k / 16; ++rk) for (unsigned cn = 0; cn < n / 16; ++cn) {
         memcpy(tile, packed + (rk * (n / 16) + cn) * 32 * bits, 32 * bits);
-        exl3_hvx_decode_tile(tile, bits, table, gathered, decoded);
+        exl3_hvx_decode_tile(tile, bits, cb == 2 ? NULL : table, gathered, decoded);
         for (unsigned row = 0; row < 16; ++row) memcpy(output + ((rk * 16 + row) * n + cn * 16) * 2, decoded + row * 16, 32);
     }
     *cycles = qurt_get_core_pcycles() - start;
-    HAP_compute_res_release(context);
-    qurt_hvx_unlock();
+    hvx_release(&resources);
     return 0;
 }
 

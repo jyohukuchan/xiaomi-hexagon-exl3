@@ -7,35 +7,10 @@
 #include "hvx-copy.h"
 #include "matmul-ops.h"
 #include "exl3-block.h"
+#define EXL3_HVX_MATRIX_OUTPUT
 #include "hexagon/exl3-hvx.h"
 #include <math.h>
 #include <string.h>
-
-static uint16_t mul1_table[65536];
-static qurt_mutex_t table_mutex = QURT_MUTEX_INIT;
-static int table_ready;
-
-static void prepare_table(void) {
-    qurt_mutex_lock(&table_mutex);
-    if (!table_ready) {
-        const uint16_t invbits = 0x1eee, biasbits = 0xc931;
-        _Float16 inv, bias;
-        memcpy(&inv, &invbits, 2); memcpy(&bias, &biasbits, 2);
-        // SDK 19 FP16 autovectorization changes codebook values; initialize once in scalar code.
-        #pragma clang loop vectorize(disable) interleave(disable)
-        for (unsigned state = 0; state < 65536; ++state) {
-            const uint32_t product = state * 0x83dcd12du;
-            const unsigned sum = (product & 255) + ((product >> 8) & 255) + ((product >> 16) & 255) + (product >> 24);
-            const uint16_t hbits = (uint16_t) (0x6400u + sum);
-            _Float16 h;
-            memcpy(&h, &hbits, 2);
-            h = (_Float16) fmaf((float) h, (float) inv, (float) bias);
-            memcpy(mul1_table + state, &h, 2);
-        }
-        table_ready = 1;
-    }
-    qurt_mutex_unlock(&table_mutex);
-}
 
 static float half_value(const uint16_t * ptr) {
     _Float16 h;
@@ -64,7 +39,6 @@ struct exl3_task {
     struct htp_ops_context * octx;
     unsigned bits, k, n, rows, first_row;
     size_t per_thread;
-    uint16_t * table;
     float * xh;
     unsigned char * scratch;
 };
@@ -73,22 +47,25 @@ static void exl3_worker(unsigned nth, unsigned ith, void * opaque) {
     struct exl3_task * task = (struct exl3_task *) opaque;
     const struct htp_tensor * weight = task->octx->src[0];
     const struct htp_tensor * output = task->octx->dst;
+    struct htp_thread_trace * trace = &task->octx->ctx->trace[ith];
     unsigned char * local = task->scratch + ith * task->per_thread;
     uint16_t * decoded = (uint16_t *) local;
     float * result = (float *) (decoded + 128 * 128);
     uint16_t * packed = (uint16_t *) (result + task->rows * 128);
     HVX_Vector * gathered = (HVX_Vector *) ((unsigned char *) packed + exl3_group_bytes(task->bits));
-    uint16_t * tile = (uint16_t *) (gathered + 1);
     for (unsigned nb = ith; nb < task->n / 128; nb += nth) {
         memset(result, 0, task->rows * 128 * 4);
         for (unsigned kb = 0; kb < task->k / 128; ++kb) {
+            htp_trace_event_start(trace, HTP_TRACE_EVT_HVX_W_DEQUANT, (uint16_t) kb);
             const unsigned char * group = (const unsigned char *) (uintptr_t) weight->data +
                 ((size_t) nb * (task->k / 128) + kb) * exl3_group_bytes(task->bits);
-            memcpy(packed, group, exl3_group_bytes(task->bits));
+            memcpy(packed, group, 2048u * task->bits);
             for (unsigned r = 0; r < 8; ++r) for (unsigned c = 0; c < 8; ++c) {
-                exl3_hvx_decode_tile(packed + (r * 8 + c) * 16 * task->bits, task->bits, task->table, gathered, tile);
-                for (unsigned j = 0; j < 16; ++j) memcpy(decoded + (r * 16 + j) * 128 + c * 16, tile + j * 16, 32);
+                exl3_hvx_decode_tile(packed + (r * 8 + c) * 16 * task->bits, task->bits, NULL, gathered,
+                                     decoded + r * 16 * 128 + c * 16);
             }
+            htp_trace_event_stop(trace, HTP_TRACE_EVT_HVX_W_DEQUANT, (uint16_t) kb);
+            htp_trace_event_start(trace, HTP_TRACE_EVT_HVX_COMP, (uint16_t) kb);
             for (unsigned i = 0; i < 128; ++i) {
                 HVX_VectorPair w0 = hvx_vec_f16_to_f32(*(HVX_Vector *) (decoded + i * 128));
                 HVX_VectorPair w1 = hvx_vec_f16_to_f32(*(HVX_Vector *) (decoded + i * 128 + 64));
@@ -103,6 +80,7 @@ static void exl3_worker(unsigned nth, unsigned ith, void * opaque) {
                     }
                 }
             }
+            htp_trace_event_stop(trace, HTP_TRACE_EVT_HVX_COMP, (uint16_t) kb);
         }
         const unsigned char * group = (const unsigned char *) (uintptr_t) weight->data +
             (size_t) nb * (task->k / 128) * exl3_group_bytes(task->bits);
@@ -139,12 +117,9 @@ int op_exl3_matmul(struct htp_ops_context * octx) {
     if (!capacity) return HTP_STATUS_VTCM_TOO_SMALL;
     const unsigned chunk = rows < capacity ? rows : (unsigned) capacity;
     const size_t per_thread = 32768 + (size_t) chunk * 512 + exl3_group_bytes(bits) + 128 + 512;
-    const size_t total = 131072 + (size_t) chunk * k * 4 + per_thread * octx->n_threads;
+    const size_t total = (size_t) chunk * k * 4 + per_thread * octx->n_threads;
     if (total > octx->ctx->vtcm_size) return HTP_STATUS_VTCM_TOO_SMALL;
-    prepare_table();
-    uint16_t * table = (uint16_t *) octx->ctx->vtcm_base;
-    memcpy(table, mul1_table, 131072);
-    float * xh = (float *) (table + 65536);
+    float * xh = (float *) octx->ctx->vtcm_base;
     for (unsigned first_row = 0; first_row < rows; first_row += chunk) {
         const unsigned active_rows = rows - first_row < chunk ? rows - first_row : chunk;
         for (unsigned kb = 0; kb < k / 128; ++kb) {
@@ -161,7 +136,7 @@ int op_exl3_matmul(struct htp_ops_context * octx) {
                 had128(xh + row * k + kb * 128);
             }
         }
-        struct exl3_task task = {octx, bits, k, n, active_rows, first_row, per_thread, table, xh, (unsigned char *) (xh + (size_t) chunk * k)};
+        struct exl3_task task = {octx, bits, k, n, active_rows, first_row, per_thread, xh, (unsigned char *) (xh + (size_t) chunk * k)};
         if (!work_queue_run(octx->ctx->work_queue, exl3_worker, &task, octx->n_threads)) return HTP_STATUS_INTERNAL_ERR;
     }
     return HTP_STATUS_OK;

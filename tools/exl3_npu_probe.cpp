@@ -19,6 +19,20 @@ int main() {
     constexpr unsigned k = 256, n = 384;
     uint32_t random = 0x78ef12ab;
     bool ok = true;
+    {
+        std::vector<uint16_t> states(65536), output(65536);
+        for (size_t i = 0; i < states.size(); ++i) states[i] = uint16_t(i);
+        uint64 cycles = 0;
+        status = exl3_iface_codebook_hvx(handle, reinterpret_cast<const unsigned char *>(states.data()), int(states.size() * 2),
+            reinterpret_cast<unsigned char *>(output.data()), int(output.size() * 2), &cycles);
+        size_t mismatches = 0;
+        if (!status) for (size_t i = 0; i < states.size(); ++i) {
+            const auto expected = exl3::decode_codebook(states[i], exl3::Codebook::mul1);
+            if (output[i] != expected && mismatches++ < 8) std::cout << "codebook mismatch state=" << i << " actual=" << output[i] << " expected=" << expected << '\n';
+        }
+        ok &= !status && !mismatches;
+        std::cout << "codebook_hvx status=" << status << " mismatches=" << mismatches << " cycles=" << cycles << '\n';
+    }
     for (unsigned bits = 1; bits <= 8; ++bits) {
         std::vector<uint16_t> packed(k * n * bits / 16), result(k * n), expected(k * n);
         for (auto & value : packed) {

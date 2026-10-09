@@ -12,7 +12,7 @@ static inline unsigned exl3_type_bits(unsigned type) {
 }
 static inline size_t exl3_group_bytes(unsigned bits) { return 2048u * bits + 512u; }
 static inline size_t exl3_row_chunk(unsigned bits, size_t k, unsigned threads, size_t vtcm_size) {
-    const size_t overhead = 131072u + threads * (32768u + exl3_group_bytes(bits) + 640u);
+    const size_t overhead = threads * (32768u + exl3_group_bytes(bits) + 640u);
     if (!threads || !k || vtcm_size <= overhead) return 0;
     const size_t rows = (vtcm_size - overhead) / (k * 4u + threads * 512u);
     return rows < 32u ? rows : 32u;

@@ -40,3 +40,5 @@ After row chunking put all 151 EXL3 matrices on the NPU, the same raw prompt pro
 The remaining gates are translation regression coverage, continuous batching/API, sustained throughput, and context-size validation. The current HVX decoder/matrix kernel is a correctness baseline; major performance work remains.
 
 The single-token trace reports 378.91 MiB of CPU model buffers and 1,078.13 MiB of HTP model buffers. The tied head is one serialized tensor but currently has CPU and device-side runtime copies for embedding lookup/output projection. Serialized bpw does not describe this extra runtime memory. The completion run also reports an unexpectedly large CPU scratch allocation (378.94 MiB instead of the reserved estimate); this needs investigation during memory/performance optimization.
+
+The later [exact HVX optimization](hvx-optimization.md) removes small tile copies and the runtime mul1 lookup table. It preserves decoded FP16 bit patterns and the model payload while improving the short-context decode baseline to 1.02 tokens/s. The earlier profile/timings above are retained as historical evidence, not the current optimized performance.
