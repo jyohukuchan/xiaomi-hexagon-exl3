@@ -138,19 +138,25 @@ static void hvx_release(struct hvx_resources * resources) {
     qurt_hvx_unlock();
 }
 
-int exl3_iface_codebook_hvx(remote_handle64 handle, const unsigned char * states, int states_len,
+int exl3_iface_codebook_hvx(remote_handle64 handle, uint32 mode, const unsigned char * states, int states_len,
         unsigned char * output, int output_len, uint64 * cycles) {
     (void) handle;
-    if (!states || !output || !cycles || states_len < 128 || states_len > 131072 || states_len % 128 || states_len != output_len) return 2;
+    if (mode > 1 || !states || !output || !cycles || states_len < 128 || states_len > 131072 || states_len % 128 || states_len != output_len) return 2;
     struct hvx_resources resources;
     int status = hvx_acquire(&resources);
     if (status) return status;
     HVX_Vector * input = (HVX_Vector *) resources.memory;
     HVX_Vector * result = input + 1;
+    uint16_t * table = (uint16_t *) (result + 1);
+    for (unsigned sum = 0; sum < 1024; ++sum) table[sum] = exl3_mul1_sum_value(sum);
     const uint64_t start = qurt_get_core_pcycles();
     for (int offset = 0; offset < states_len; offset += 128) {
         memcpy(input, states + offset, 128);
-        *result = exl3_hvx_mul1(*input);
+        // Repeat in VTCM so host copies do not dominate this comparison.
+        for (unsigned repeat = 0; repeat < 64; ++repeat) {
+            const HVX_Vector value = *(volatile HVX_Vector *) input;
+            *(volatile HVX_Vector *) result = mode ? exl3_hvx_mul1_sum_lookup(value, table, result) : exl3_hvx_mul1(value);
+        }
         memcpy(output + offset, result, 128);
     }
     *cycles = qurt_get_core_pcycles() - start;

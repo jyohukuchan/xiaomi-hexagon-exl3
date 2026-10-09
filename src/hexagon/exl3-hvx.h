@@ -6,10 +6,13 @@
 typedef unsigned short exl3_v64h __attribute__((vector_size(128)));
 typedef exl3_v64h exl3_v64h_unaligned __attribute__((aligned(1)));
 static inline void exl3_hvx_sync(void * address);
-static inline HVX_Vector exl3_hvx_mul1_half(HVX_Vector low, HVX_Vector high) {
+static inline HVX_Vector exl3_hvx_mul1_sum(HVX_Vector low, HVX_Vector high) {
     const HVX_Vector product = Q6_Vw_vadd_VwVw(low, Q6_Vw_vasl_VwR(high, 16));
+    return Q6_Vuw_vrmpy_VubRub(product, 0x01010101);
+}
+static inline HVX_Vector exl3_hvx_mul1_half(HVX_Vector low, HVX_Vector high) {
     // Dot four unsigned bytes with ones instead of shift/mask/add reduction.
-    const HVX_Vector sum = Q6_Vuw_vrmpy_VubRub(product, 0x01010101);
+    const HVX_Vector sum = exl3_hvx_mul1_sum(low, high);
     // The codebook is exactly (1774 * sum - 905216) / 2^18.
     const HVX_Vector numerator = Q6_Vw_vsub_VwVw(Q6_Vw_vmpyi_VwRh(sum, 0x06ee06ee), Q6_V_vsplat_R(905216));
     // The numerator magnitude fits 20 bits; exponent rebias scales it exactly.
@@ -28,6 +31,23 @@ static inline HVX_Vector exl3_hvx_mul1(HVX_Vector states) {
     const HVX_Vector even = exl3_hvx_mul1_half(Q6_V_lo_W(low), Q6_V_lo_W(high));
     const HVX_Vector odd = exl3_hvx_mul1_half(Q6_V_hi_W(low), Q6_V_hi_W(high));
     return Q6_Vh_vshuff_Vh(Q6_Vh_vpacke_VwVw(odd, even));
+}
+static inline uint16_t exl3_mul1_sum_value(unsigned sum) {
+    union { float f; uint32_t bits; } value;
+    value.f = (1774 * (int) sum - 905216) * 0x1p-18f;
+    uint32_t magnitude = value.bits & 0x7fffffff;
+    magnitude += 0xfff + ((magnitude >> 13) & 1);
+    return (uint16_t) (((value.bits >> 16) & 0x8000) | ((magnitude - 0x38000000) >> 13));
+}
+static inline HVX_Vector exl3_hvx_mul1_sum_lookup(HVX_Vector states, const uint16_t * table, HVX_Vector * gathered) {
+    const HVX_VectorPair low = Q6_Wuw_vmpy_VuhRuh(states, 0xd12dd12d);
+    const HVX_VectorPair high = Q6_Wuw_vmpy_VuhRuh(states, 0x83dc83dc);
+    const HVX_Vector even = exl3_hvx_mul1_sum(Q6_V_lo_W(low), Q6_V_lo_W(high));
+    const HVX_Vector odd = exl3_hvx_mul1_sum(Q6_V_hi_W(low), Q6_V_hi_W(high));
+    const HVX_VectorPair offsets = Q6_W_vcombine_VV(Q6_Vw_vasl_VwR(odd, 1), Q6_Vw_vasl_VwR(even, 1));
+    Q6_vgather_ARMWw(gathered, (uint32_t) table, 2047, offsets);
+    exl3_hvx_sync(gathered);
+    return *gathered;
 }
 // A null table selects the exact mul1 arithmetic codebook.
 static inline HVX_Vector exl3_hvx_lookup(HVX_Vector states, const uint16_t * table, HVX_Vector * gathered) {
@@ -181,10 +201,10 @@ static inline void exl3_hvx_decode4(const uint16_t * packed, uint16_t * output) 
     exl3_hvx_scatter(output, Q6_Vh_vadd_VhVh((HVX_Vector) scatter, Q6_Vh_vsplat_R(256)), exl3_hvx_mul1((HVX_Vector) ((a << 12) | (b >> 4))));
     exl3_hvx_scatter(output, Q6_Vh_vadd_VhVh((HVX_Vector) scatter, Q6_Vh_vsplat_R(288)), exl3_hvx_mul1((HVX_Vector) b));
 }
-static inline void exl3_hvx_decode_tile(const uint16_t * packed, unsigned bits, const uint16_t * table, HVX_Vector * gathered, uint16_t * output) {
+// The caller must synchronize before reading any scattered output.
+static inline void exl3_hvx_decode_tile_async(const uint16_t * packed, unsigned bits, const uint16_t * table, HVX_Vector * gathered, uint16_t * output) {
     if (!table && bits == 4) {
         exl3_hvx_decode4(packed, output);
-        exl3_hvx_sync(output);
         return;
     }
     const exl3_v64h lo = *(const exl3_v64h_unaligned *) packed;
@@ -209,5 +229,8 @@ static inline void exl3_hvx_decode_tile(const uint16_t * packed, unsigned bits, 
             exl3_hvx_part_8_3(lo, hi, table, gathered, output);
             break;
     }
+}
+static inline void exl3_hvx_decode_tile(const uint16_t * packed, unsigned bits, const uint16_t * table, HVX_Vector * gathered, uint16_t * output) {
+    exl3_hvx_decode_tile_async(packed, bits, table, gathered, output);
     exl3_hvx_sync(output);
 }

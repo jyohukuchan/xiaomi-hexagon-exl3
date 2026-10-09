@@ -81,9 +81,10 @@ static void exl3_worker(unsigned nth, unsigned ith, void * opaque) {
                 ((size_t) nb * (task->k / 128) + kb) * exl3_group_bytes(task->bits);
             memcpy(packed, group, 2048u * task->bits);
             for (unsigned r = 0; r < 8; ++r) for (unsigned c = 0; c < 8; ++c) {
-                exl3_hvx_decode_tile(packed + (r * 8 + c) * 16 * task->bits, task->bits, NULL, gathered,
+                exl3_hvx_decode_tile_async(packed + (r * 8 + c) * 16 * task->bits, task->bits, NULL, gathered,
                                      decoded + ((c / 2) * 4 + r / 2) * 1024 + (r % 2) * 512 + (c % 2) * 32);
             }
+            exl3_hvx_sync(decoded + 128 * 128);
             htp_trace_event_stop(trace, HTP_TRACE_EVT_HVX_W_DEQUANT, (uint16_t) kb);
             htp_trace_event_start(trace, HTP_TRACE_EVT_HVX_COMP, (uint16_t) kb);
             if (task->hmx) {
