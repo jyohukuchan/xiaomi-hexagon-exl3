@@ -43,7 +43,7 @@ def read_headers(directory):
                 raise ValueError(f"Invalid tensor span: {name}")
             spans.append((start, end))
             tensors[name] = {"shape": shape, "dtype": dtype, "elements": elements,
-                             "bytes": end - start, "file": path.name}
+                             "bytes": end - start, "file": path.name, "offset": 8 + length + start}
         cursor = 0
         for start, end in sorted(spans):
             if start != cursor:

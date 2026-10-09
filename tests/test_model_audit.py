@@ -7,9 +7,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from inspect_model import audit, read_headers
+from package_model import validate_inventory
 
 
 class ModelAuditTest(unittest.TestCase):
+    def test_deployment_rejects_missing_layer(self):
+        reference = {"model.language_model.layers.0.mlp.up_proj.weight": {"shape": [128, 128]}}
+        with self.assertRaisesRegex(ValueError, "Missing text-model tensor"):
+            validate_inventory({}, reference)
+
+    def test_deployment_rejects_missing_scales(self):
+        reference = {"model.language_model.layers.0.mlp.up_proj.weight": {"shape": [128, 128]}}
+        selected = {"model.language_model.layers.0.mlp.up_proj.trellis": {"shape": [8, 8, 64], "dtype": "I16"}}
+        with self.assertRaisesRegex(ValueError, "scales"):
+            validate_inventory(selected, reference)
+
     def write(self, directory, entries, payload):
         header = json.dumps(entries).encode()
         (directory / "model.safetensors").write_bytes(struct.pack("<Q", len(header)) + header + bytes(payload))
