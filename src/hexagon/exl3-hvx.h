@@ -8,11 +8,8 @@ typedef exl3_v64h exl3_v64h_unaligned __attribute__((aligned(1)));
 static inline void exl3_hvx_sync(void * address);
 static inline HVX_Vector exl3_hvx_mul1_half(HVX_Vector low, HVX_Vector high) {
     const HVX_Vector product = Q6_Vw_vadd_VwVw(low, Q6_Vw_vasl_VwR(high, 16));
-    const HVX_Vector mask = Q6_V_vsplat_R(255);
-    HVX_Vector sum = Q6_V_vand_VV(product, mask);
-    sum = Q6_Vw_vadd_VwVw(sum, Q6_V_vand_VV(Q6_Vuw_vlsr_VuwR(product, 8), mask));
-    sum = Q6_Vw_vadd_VwVw(sum, Q6_V_vand_VV(Q6_Vuw_vlsr_VuwR(product, 16), mask));
-    sum = Q6_Vw_vadd_VwVw(sum, Q6_Vuw_vlsr_VuwR(product, 24));
+    // Dot four unsigned bytes with ones instead of shift/mask/add reduction.
+    const HVX_Vector sum = Q6_Vuw_vrmpy_VubRub(product, 0x01010101);
     // The codebook is exactly (1774 * sum - 905216) / 2^18.
     const HVX_Vector numerator = Q6_Vw_vsub_VwVw(Q6_Vw_vmpyi_VwRh(sum, 0x06ee06ee), Q6_V_vsplat_R(905216));
     // The numerator magnitude fits 20 bits; exponent rebias scales it exactly.
