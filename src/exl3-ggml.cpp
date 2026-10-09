@@ -4,6 +4,9 @@
 #include "ggml.h"
 #include <vector>
 #include <cstring>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 
 static size_t row_offset(const ggml_tensor * t, size_t row) {
     const size_t i1 = row % t->ne[1];
@@ -14,14 +17,18 @@ static size_t row_offset(const ggml_tensor * t, size_t row) {
 }
 
 extern "C" void ggml_exl3_get_rows(const ggml_compute_params * params, ggml_tensor * dst) {
+    const char * profile_option = std::getenv("EXL3_CPU_EMBED_PROFILE");
+    const bool profile = profile_option && std::strcmp(profile_option, "1") == 0;
+    const auto started = profile ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+    size_t completed_groups = 0;
     const auto * weight = dst->src[0];
     const auto * ids = dst->src[1];
     const size_t k = weight->ne[0], n = weight->ne[1];
     const unsigned bits = exl3_type_bits(weight->type);
-    GGML_ASSERT(bits && k % 128 == 0 && n % 128 == 0 && weight->ne[2] == 1 && weight->ne[3] == 1);
+    GGML_ASSERT(bits && k && n && k % 128 == 0 && n % 128 == 0 && weight->ne[2] == 1 && weight->ne[3] == 1);
     GGML_ASSERT(ids->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_F32);
-    std::vector<uint16_t> decoded(128 * 128);
     const size_t count = ggml_nelements(ids);
+    std::vector<uint16_t> decoded(128 * 128);
     for (size_t r = params->ith; r < count; r += params->nth) {
         int32_t id;
         std::memcpy(&id, (const char *) ids->data + row_offset(ids, r / ids->ne[0]) + (r % ids->ne[0]) * ids->nb[0], 4);
@@ -32,7 +39,12 @@ extern "C" void ggml_exl3_get_rows(const ggml_compute_params * params, ggml_tens
             exl3::reconstruct((const uint16_t *) group, exl3_group_su(group, bits), exl3_group_sv(group, bits),
                               128, 128, bits, exl3::Codebook::mul1, decoded.data());
             for (size_t i = 0; i < 128; ++i) result[kb * 128 + i] = exl3::half_to_float(decoded[i * 128 + id % 128]);
+            ++completed_groups;
         }
+    }
+    if (profile) {
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        std::fprintf(stderr, "EXL3_EMBED thread=%d threads=%d ids=%zu groups=%zu ms=%.6f\n", params->ith, params->nth, count, completed_groups, ms);
     }
 }
 

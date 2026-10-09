@@ -161,24 +161,34 @@ int exl3_iface_hadamard_hvx(remote_handle64 handle, uint32 normalize, const unsi
 int exl3_iface_codebook_hvx(remote_handle64 handle, uint32 mode, const unsigned char * states, int states_len,
         unsigned char * output, int output_len, uint64 * cycles) {
     (void) handle;
-    if (mode > 2 || !states || !output || !cycles || states_len < 128 || states_len > 131072 || states_len % 128 || states_len != output_len) return 2;
+    if (mode > 3 || !states || !output || !cycles || states_len < 128 || states_len > 131072 || states_len % 128 || states_len != output_len) return 2;
     struct hvx_resources resources;
     int status = hvx_acquire(&resources);
     if (status) return status;
     HVX_Vector * input = (HVX_Vector *) resources.memory;
-    HVX_Vector * result = input + 1;
-    uint16_t * table = (uint16_t *) (result + 1);
+    HVX_Vector * result = input + 4;
+    HVX_Vector * gathered = result + 4;
+    uint16_t * table = (uint16_t *) (gathered + 5);
     for (unsigned sum = 0; sum < 1024; ++sum) table[sum] = exl3_mul1_sum_value(sum);
     const uint64_t start = qurt_get_core_pcycles();
-    for (int offset = 0; offset < states_len; offset += 128) {
-        memcpy(input, states + offset, 128);
+    for (int offset = 0; offset < states_len; offset += 512) {
+        const unsigned vectors = (unsigned) (states_len - offset < 512 ? states_len - offset : 512) / 128;
+        memcpy(input, states + offset, vectors * 128);
         // Repeat in VTCM so host copies do not dominate this comparison.
         for (unsigned repeat = 0; repeat < 64; ++repeat) {
-            const HVX_Vector value = *(volatile HVX_Vector *) input;
-            *(volatile HVX_Vector *) result = mode == 2 ? exl3_hvx_mul1_packed(value) :
-                mode == 1 ? exl3_hvx_mul1_sum_lookup(value, table, result) : exl3_hvx_mul1_reference(value);
+            if (mode == 3) {
+#pragma unroll 4
+                for (unsigned v = 0; v < vectors; ++v) exl3_hvx_mul1_sum_gather(((volatile HVX_Vector *) input)[v], table, gathered + v);
+                exl3_hvx_sync(gathered);
+#pragma unroll 4
+                for (unsigned v = 0; v < vectors; ++v) ((volatile HVX_Vector *) result)[v] = gathered[v];
+            } else for (unsigned v = 0; v < vectors; ++v) {
+                const HVX_Vector value = ((volatile HVX_Vector *) input)[v];
+                ((volatile HVX_Vector *) result)[v] = mode == 2 ? exl3_hvx_mul1_packed(value) :
+                    mode == 1 ? exl3_hvx_mul1_sum_lookup(value, table, gathered + v) : exl3_hvx_mul1_reference(value);
+            }
         }
-        memcpy(output + offset, result, 128);
+        memcpy(output + offset, result, vectors * 128);
     }
     *cycles = qurt_get_core_pcycles() - start;
     hvx_release(&resources);

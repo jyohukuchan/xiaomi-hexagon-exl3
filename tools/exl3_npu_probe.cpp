@@ -58,7 +58,7 @@ int main() {
         std::cout << "hadamard_hvx normalize=" << normalize << " status=" << status << " mismatches=" << mismatches << " nmse=" << nmse
                   << " max_error=" << max_error << " cycles=" << cycles << '\n';
     }
-    for (unsigned mode : {0u, 1u, 2u}) {
+    for (unsigned mode : {0u, 1u, 2u, 3u}) {
         std::vector<uint16_t> states(65536), output(65536);
         for (size_t i = 0; i < states.size(); ++i) states[i] = uint16_t(i);
         uint64 cycles = 0;
@@ -71,6 +71,17 @@ int main() {
         }
         ok &= !status && !mismatches;
         std::cout << "codebook_hvx mode=" << mode << " iterations=64 status=" << status << " mismatches=" << mismatches << " cycles=" << cycles << '\n';
+    }
+    for (unsigned vectors : {1u, 2u, 3u}) {
+        std::vector<uint16_t> states(vectors * 64), output(states.size());
+        for (size_t i = 0; i < states.size(); ++i) states[i] = uint16_t(i * 997 + 64123);
+        uint64 cycles = 0;
+        status = exl3_iface_codebook_hvx(handle, 3, reinterpret_cast<const unsigned char *>(states.data()), int(states.size() * 2),
+            reinterpret_cast<unsigned char *>(output.data()), int(output.size() * 2), &cycles);
+        size_t mismatches = 0;
+        if (!status) for (size_t i = 0; i < states.size(); ++i) mismatches += output[i] != exl3::decode_codebook(states[i], exl3::Codebook::mul1);
+        ok &= !status && !mismatches;
+        std::cout << "codebook_pipeline_tail vectors=" << vectors << " status=" << status << " mismatches=" << mismatches << '\n';
     }
     for (unsigned bits = 1; bits <= 8; ++bits) {
         std::vector<uint16_t> packed(k * n * bits / 16), result(k * n), expected(k * n);

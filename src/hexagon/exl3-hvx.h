@@ -60,13 +60,16 @@ static inline uint16_t exl3_mul1_sum_value(unsigned sum) {
     magnitude += 0xfff + ((magnitude >> 13) & 1);
     return (uint16_t) (((value.bits >> 16) & 0x8000) | ((magnitude - 0x38000000) >> 13));
 }
-static inline HVX_Vector exl3_hvx_mul1_sum_lookup(HVX_Vector states, const uint16_t * table, HVX_Vector * gathered) {
+static inline void exl3_hvx_mul1_sum_gather(HVX_Vector states, const uint16_t * table, HVX_Vector * gathered) {
     const HVX_VectorPair low = Q6_Wuw_vmpy_VuhRuh(states, 0xd12dd12d);
     const HVX_VectorPair high = Q6_Wuw_vmpy_VuhRuh(states, 0x83dc83dc);
     const HVX_Vector even = exl3_hvx_mul1_sum(Q6_V_lo_W(low), Q6_V_lo_W(high));
     const HVX_Vector odd = exl3_hvx_mul1_sum(Q6_V_hi_W(low), Q6_V_hi_W(high));
     const HVX_VectorPair offsets = Q6_W_vcombine_VV(Q6_Vw_vasl_VwR(odd, 1), Q6_Vw_vasl_VwR(even, 1));
     Q6_vgather_ARMWw(gathered, (uint32_t) table, 2047, offsets);
+}
+static inline HVX_Vector exl3_hvx_mul1_sum_lookup(HVX_Vector states, const uint16_t * table, HVX_Vector * gathered) {
+    exl3_hvx_mul1_sum_gather(states, table, gathered);
     exl3_hvx_sync(gathered);
     return *gathered;
 }

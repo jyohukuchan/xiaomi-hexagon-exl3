@@ -53,8 +53,12 @@ int main(int argc, char ** argv) {
         auto * y = ggml_mul_mat(ctx, w, x);
         auto * residual = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, batch);
         auto * added = ggml_add(ctx, y, residual);
-        auto * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 3);
-        auto * gathered = ggml_get_rows(ctx, w, ids);
+        struct row_case { size_t count; ggml_tensor * ids; ggml_tensor * output; };
+        std::vector<row_case> row_cases;
+        if (std::string(argv[1]) == "CPU") for (size_t count : {1u, 3u, 17u}) {
+            auto * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, count);
+            row_cases.push_back({count, ids, ggml_get_rows(ctx, w, ids)});
+        }
         ggml_set_name(w, "exl3_weight"); ggml_set_name(x, "activation"); ggml_set_name(y, "result");
         if (!ggml_backend_supports_op(backend, y)) throw std::runtime_error("Backend rejected EXL3 matrix operation");
         auto * graph = ggml_new_graph_custom(ctx, 64, false);
@@ -100,22 +104,33 @@ int main(int argc, char ** argv) {
         std::cout << "backend=" << argv[1] << " k=" << k << " n=" << n << " bits=" << bits << " batch=" << batch << " input=" << input_name << " ms=" << ms << " matmul_add_nmse=" << nmse << '\n';
         bool rows_ok = true;
         if (std::string(argv[1]) == "CPU") {
-            const int32_t indices[3] = {0, int32_t(n / 2), int32_t(n - 1)};
-            ggml_backend_tensor_set(ids, indices, 0, sizeof(indices));
-            auto * rows_graph = ggml_new_graph_custom(ctx, 64, false);
-            ggml_build_forward_expand(rows_graph, gathered);
-            if (ggml_backend_graph_compute(backend, rows_graph) != GGML_STATUS_SUCCESS) throw std::runtime_error("Embedding graph failed");
-            std::vector<float> values(k * 3);
-            ggml_backend_tensor_get(gathered, values.data(), 0, values.size() * 4);
-            double e = 0, denominator = 0;
-            for (size_t r = 0; r < 3; ++r) for (size_t i = 0; i < k; ++i) {
-                const double expected = ggml_fp16_to_fp32(original[i * n + indices[r]]);
-                const double delta = values[r * k + i] - expected;
-                e += delta * delta; denominator += expected * expected;
+            const auto reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+            const auto set_threads = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+            if (!set_threads) throw std::runtime_error("CPU thread control unavailable");
+            for (const auto & test : row_cases) {
+                std::vector<int32_t> indices(test.count);
+                for (size_t r = 0; r < test.count; ++r) indices[r] = test.count == 1 ? int32_t(n - 1) : r % 3 == 0 ? 0 : r % 3 == 1 ? int32_t(n / 2) : int32_t(n - 1);
+                ggml_backend_tensor_set(test.ids, indices.data(), 0, indices.size() * 4);
+                auto * rows_graph = ggml_new_graph_custom(ctx, 64, false);
+                ggml_build_forward_expand(rows_graph, test.output);
+                std::vector<float> baseline, values(k * test.count);
+                for (int threads : {1, 2, 4, 8}) {
+                    set_threads(backend, threads);
+                    if (ggml_backend_graph_compute(backend, rows_graph) != GGML_STATUS_SUCCESS) throw std::runtime_error("Embedding graph failed");
+                    ggml_backend_tensor_get(test.output, values.data(), 0, values.size() * 4);
+                    if (threads == 1) baseline = values;
+                    else if (std::memcmp(baseline.data(), values.data(), values.size() * 4)) throw std::runtime_error("Parallel embedding differs bit for bit");
+                    double e = 0, denominator = 0;
+                    for (size_t r = 0; r < test.count; ++r) for (size_t i = 0; i < k; ++i) {
+                        const double expected = ggml_fp16_to_fp32(original[i * n + indices[r]]);
+                        const double delta = values[r * k + i] - expected;
+                        e += delta * delta; denominator += expected * expected;
+                    }
+                    const double row_nmse = denominator ? e / denominator : e;
+                    rows_ok &= std::isfinite(row_nmse) && row_nmse < 1e-6;
+                    std::cout << "embedding_count=" << test.count << " threads=" << threads << " embedding_nmse=" << row_nmse << '\n';
+                }
             }
-            const double row_nmse = denominator ? e / denominator : e;
-            rows_ok = std::isfinite(row_nmse) && row_nmse < 1e-6;
-            std::cout << "embedding_nmse=" << row_nmse << '\n';
         }
         ggml_backend_buffer_free(buffer); buffer = nullptr;
         ggml_free(ctx); ctx = nullptr;
