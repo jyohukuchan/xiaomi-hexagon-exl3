@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <vector>
 
@@ -19,6 +20,44 @@ int main() {
     constexpr unsigned k = 256, n = 384;
     uint32_t random = 0x78ef12ab;
     bool ok = true;
+    for (unsigned normalize : {0u, 1u}) {
+        std::vector<float> input(128 * 128), result(input.size());
+        for (size_t i = 0; i < input.size(); ++i) {
+            const unsigned block = unsigned(i / 128), j = unsigned(i % 128);
+            random ^= random << 13; random ^= random >> 17; random ^= random << 5;
+            input[i] = block == 0 ? 0 : block == 1 ? float(j == 0) : block == 2 ? 1 :
+                       block == 3 ? (j & 1 ? -1.0f : 1.0f) :
+                       float(int(random % 8192) - 4096) / (block & 1 ? 997.0f : 8192.0f);
+        }
+        auto expected = input;
+        if (normalize) exl3::hadamard128(expected.data(), expected.size());
+        else for (size_t block = 0; block < expected.size(); block += 128) {
+            for (unsigned step = 1; step < 128; step *= 2) for (unsigned base = 0; base < 128; base += step * 2) {
+                for (unsigned j = 0; j < step; ++j) {
+                    const float a = expected[block + base + j], b = expected[block + base + j + step];
+                    expected[block + base + j] = a + b; expected[block + base + j + step] = a - b;
+                }
+            }
+        }
+        uint64 cycles = 0;
+        status = exl3_iface_hadamard_hvx(handle, normalize, reinterpret_cast<const unsigned char *>(input.data()), int(input.size() * 4),
+            reinterpret_cast<unsigned char *>(result.data()), int(result.size() * 4), &cycles);
+        size_t mismatches = 0;
+        bool finite = true;
+        double error = 0, norm = 0, max_error = 0;
+        if (!status) for (size_t i = 0; i < input.size(); ++i) {
+            mismatches += std::memcmp(&expected[i], &result[i], sizeof(float)) != 0;
+            const double delta = result[i] - expected[i];
+            finite &= std::isfinite(result[i]);
+            error += delta * delta; norm += double(expected[i]) * expected[i];
+            max_error = std::max(max_error, std::abs(delta));
+        }
+        const double nmse = error / norm;
+        // H128 is floating-point arithmetic; packed-weight decoding below stays bit-exact.
+        ok &= !status && finite && nmse < 1e-10 && max_error < (normalize ? 8e-6 : 8e-5);
+        std::cout << "hadamard_hvx normalize=" << normalize << " status=" << status << " mismatches=" << mismatches << " nmse=" << nmse
+                  << " max_error=" << max_error << " cycles=" << cycles << '\n';
+    }
     for (unsigned mode : {0u, 1u}) {
         std::vector<uint16_t> states(65536), output(65536);
         for (size_t i = 0; i < states.size(); ++i) states[i] = uint16_t(i);

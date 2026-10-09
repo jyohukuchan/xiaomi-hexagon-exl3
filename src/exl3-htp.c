@@ -10,6 +10,7 @@
 #include "exl3-block.h"
 #define EXL3_HVX_HMX_OUTPUT
 #include "hexagon/exl3-hvx.h"
+#include "hexagon/exl3-hadamard.h"
 #include <math.h>
 #include <string.h>
 
@@ -20,13 +21,7 @@ static float half_value(const uint16_t * ptr) {
 }
 
 static void had128(float * x) {
-    for (unsigned step = 1; step < 128; step *= 2) {
-        for (unsigned base = 0; base < 128; base += 2 * step) for (unsigned j = 0; j < step; ++j) {
-            const float a = x[base + j], b = x[base + j + step];
-            x[base + j] = a + b; x[base + j + step] = a - b;
-        }
-    }
-    for (unsigned j = 0; j < 128; ++j) x[j] *= 0.08838834764831844055f;
+    exl3_had128_hvx(x, 1);
 }
 
 static uint64_t offset_row(const struct htp_tensor * tensor, unsigned row) {
@@ -184,6 +179,8 @@ int op_exl3_matmul(struct htp_ops_context * octx) {
     qurt_mutex_t hmx_lock = QURT_MUTEX_INIT;
     for (unsigned first_row = 0; first_row < rows; first_row += chunk) {
         const unsigned active_rows = rows - first_row < chunk ? rows - first_row : chunk;
+        struct htp_thread_trace * prep_trace = &octx->ctx->trace[0];
+        htp_trace_event_start(prep_trace, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) first_row);
         for (unsigned kb = 0; kb < k / 128; ++kb) {
             const unsigned char * group = (const unsigned char *) (uintptr_t) weight->data + kb * exl3_group_bytes(bits);
             const uint16_t * su = exl3_group_su(group, bits);
@@ -198,6 +195,8 @@ int op_exl3_matmul(struct htp_ops_context * octx) {
                 had128(xh + row * k + kb * 128);
             }
         }
+        htp_trace_event_stop(prep_trace, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) first_row);
+        htp_trace_event_start(prep_trace, HTP_TRACE_EVT_HVX_A_QUANT, (uint16_t) first_row);
         if (hmx) {
             memset(act_half, 0, k * 64u);
             hmx_init_column_scales(scales, Q6_V_vsplat_R(0x3c00));
@@ -214,6 +213,7 @@ int op_exl3_matmul(struct htp_ops_context * octx) {
                 hvx_vmem(act_half + (col / 32 + 1) * 1024 + (row / 2) * 64) = Q6_V_hi_W(pair);
             }
         }
+        htp_trace_event_stop(prep_trace, HTP_TRACE_EVT_HVX_A_QUANT, (uint16_t) first_row);
         struct exl3_task task = {octx, bits, k, n, active_rows, first_row, per_thread, xh, scratch, hmx, act_half, scales, &hmx_lock};
         if (!work_queue_run(octx->ctx->work_queue, exl3_worker, &task, octx->n_threads)) return HTP_STATUS_INTERNAL_ERR;
     }

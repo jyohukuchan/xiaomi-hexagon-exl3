@@ -8,6 +8,7 @@
 #include <HAP_compute_res.h>
 #include <HAP_power.h>
 #include "exl3-hvx.h"
+#include "exl3-hadamard.h"
 
 int exl3_iface_open(const char * uri, remote_handle64 * handle) {
     (void) uri;
@@ -136,6 +137,25 @@ static int hvx_acquire(struct hvx_resources * resources) {
 static void hvx_release(struct hvx_resources * resources) {
     HAP_compute_res_release(resources->context);
     qurt_hvx_unlock();
+}
+
+int exl3_iface_hadamard_hvx(remote_handle64 handle, uint32 normalize, const unsigned char * input, int input_len,
+        unsigned char * output, int output_len, uint64 * cycles) {
+    (void) handle;
+    if (normalize > 1 || !input || !output || !cycles || input_len < 512 || input_len > 65536 || input_len % 512 || input_len != output_len) return 2;
+    struct hvx_resources resources;
+    int status = hvx_acquire(&resources);
+    if (status) return status;
+    float * block = (float *) resources.memory;
+    const uint64_t start = qurt_get_core_pcycles();
+    for (int offset = 0; offset < input_len; offset += 512) {
+        memcpy(block, input + offset, 512);
+        exl3_had128_hvx(block, normalize);
+        memcpy(output + offset, block, 512);
+    }
+    *cycles = qurt_get_core_pcycles() - start;
+    hvx_release(&resources);
+    return 0;
 }
 
 int exl3_iface_codebook_hvx(remote_handle64 handle, uint32 mode, const unsigned char * states, int states_len,
