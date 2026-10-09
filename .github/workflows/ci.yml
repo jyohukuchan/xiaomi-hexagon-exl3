@@ -1,0 +1,13 @@
+name: Codec and model audit
+on: [push, pull_request]
+jobs:
+  portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build portable codec
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j 2
+      - name: Test codec
+        run: ctest --test-dir build --output-on-failure
+      - name: Test model audit
+        run: python3 -m unittest discover -s tests -p 'test_model_audit.py'

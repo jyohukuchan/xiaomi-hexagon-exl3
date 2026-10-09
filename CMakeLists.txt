@@ -1,0 +1,34 @@
+cmake_minimum_required(VERSION 3.20)
+project(xiaomi_hexagon_exl3 VERSION 0.1.0 LANGUAGES C CXX)
+
+add_library(exl3_codec STATIC src/exl3_codec.cpp)
+target_include_directories(exl3_codec PUBLIC include)
+target_compile_features(exl3_codec PUBLIC cxx_std_17)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(exl3_codec PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(test_codec tests/test_codec.cpp)
+    target_link_libraries(test_codec PRIVATE exl3_codec)
+    add_test(NAME codec COMMAND test_codec)
+endif()
+
+add_executable(exl3_verify tools/exl3_verify.cpp)
+target_link_libraries(exl3_verify PRIVATE exl3_codec)
+install(TARGETS exl3_verify RUNTIME DESTINATION bin)
+
+option(EXL3_BUILD_HEXAGON "Build the standalone Hexagon decoder probe" OFF)
+if(EXL3_BUILD_HEXAGON)
+    include(${HEXAGON_SDK_ROOT}/build/cmake/hexagon_fun.cmake)
+    add_library(exl3_iface_stub OBJECT ${CMAKE_CURRENT_BINARY_DIR}/exl3_iface_stub.c)
+    target_include_directories(exl3_iface_stub PUBLIC ${HEXAGON_SDK_ROOT}/incs
+        ${HEXAGON_SDK_ROOT}/incs/stddef ${CMAKE_CURRENT_BINARY_DIR})
+    build_idl(src/hexagon/exl3_iface.idl exl3_iface_stub)
+    add_executable(exl3_npu_probe tools/exl3_npu_probe.cpp)
+    target_link_libraries(exl3_npu_probe PRIVATE exl3_codec exl3_iface_stub
+        ${HEXAGON_SDK_ROOT}/ipc/fastrpc/remote/ship/android_aarch64/libcdsprpc.so log)
+    target_include_directories(exl3_npu_probe PRIVATE ${HEXAGON_SDK_ROOT}/incs
+        ${HEXAGON_SDK_ROOT}/incs/stddef ${CMAKE_CURRENT_BINARY_DIR})
+endif()

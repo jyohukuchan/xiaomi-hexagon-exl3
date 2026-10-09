@@ -5,7 +5,7 @@ Experimental inference engine work for running EXL3-quantized language models on
 The first end-to-end target is [IndexTeam/Index-Translate-2B](https://huggingface.co/IndexTeam/Index-Translate-2B), with request batching and an OpenAI-compatible HTTP API. Most weights will use approximately 4 bpw, while precision-sensitive tensors may use higher precision provided the complete serialized weight payload remains at or below 5.0 average bits per parameter.
 
 > [!IMPORTANT]
-> This repository is currently at the hardware-validation stage. It does not yet contain a working EXL3 inference engine.
+> This repository currently contains EXL3 codec and Hexagon matrix-operation prototypes. End-to-end model inference and the API are under development. See [milestones](docs/MILESTONES.md) for the verified status.
 
 ## Validated hardware
 
@@ -40,6 +40,8 @@ The single-request decode target is **15 tokens/second or faster** on the Xiaomi
 See the [full benchmark report](docs/benchmarks/2026-10-09-xiaomi-14-ultra.md) for methodology and power-measurement limitations.
 
 ## Planned architecture
+
+Build and verification commands are documented in [development instructions](docs/DEVELOPMENT.md).
 
 1. Define the EXL3 mixed-bit packed-weight layout and conversion pipeline.
 2. Implement packed dequantization and matrix kernels for HVX and HMX.
