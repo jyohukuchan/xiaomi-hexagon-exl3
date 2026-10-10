@@ -17,7 +17,7 @@ def near(a, b):
         raise ValueError("Measurement arithmetic mismatch")
 
 
-def audit(run):
+def audit(run, allow_profile=False):
     if run["exit_code"] or run["abort"] or run["parse_errors"]:
         raise ValueError("Failed/incomplete experiment")
     rows = run["records"]
@@ -26,6 +26,8 @@ def audit(run):
         if len(values) != 1: raise ValueError("Missing/duplicate " + event)
         return values[0]
     init, result, finished = one("init"), one("result"), one("finished")
+    if (run.get("profile") or init.get("profile")) and not allow_profile:
+        raise ValueError("Profiled runs are not timing baselines")
     if result["stopped"] or finished["stopped"] or result["calls"] != run["repeats"]:
         raise ValueError("Interrupted/incomplete repetitions")
     for key in ("bits", "batch", "n", "k", "repeats"):
@@ -37,7 +39,8 @@ def audit(run):
     if legacy and init["batch"] % 64:
         raise ValueError("Legacy macro record cannot establish partial-row padding")
     api_batch = init.get("api_batch", init["batch"])
-    expected_rows = init["batch"] if engine == "ggml" else (init["batch"] + 63) // 64 * 64
+    route = init.get("route", "auto")
+    expected_rows = ((init["batch"] + 31) // 32 * 32 if route == "hmx" else init["batch"]) if engine == "ggml" else (init["batch"] + 63) // 64 * 64
     if api_batch != expected_rows:
         raise ValueError("Unexpected padding")
     if not init["boot_s"] < result["boot_s"] < finished["boot_s"]:
@@ -73,7 +76,7 @@ def audit(run):
         if result["physical_GOPS"] is not None: raise ValueError("GGML physical padding is not measured")
     else:
         near(result.get("physical_GOPS", result["effective_GOPS"]) if legacy else result["physical_GOPS"], result["effective_GOPS"] * api_batch / init["batch"])
-    return {"engine": engine, "legacy_unpadded_macro_schema": legacy, "bits": init["bits"], "batch": init["batch"], "api_batch": api_batch,
+    return {"engine": engine, "route": route, "profile": init.get("profile", False), "legacy_unpadded_macro_schema": legacy, "bits": init["bits"], "batch": init["batch"], "api_batch": api_batch,
             "n": init["n"], "k": init["k"], "mode": "scaled" if init.get("scaled") else "raw",
             "tensor": run.get("tensor"), "model_sha256": run.get("model_sha256"), "raw_sha256": run["raw_sha256"],
             "reference_samples": validations[-1]["samples"], "full_reference": validations[-1]["full"],

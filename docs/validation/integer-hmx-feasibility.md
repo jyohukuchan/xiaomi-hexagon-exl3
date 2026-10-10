@@ -11,6 +11,12 @@ intrinsically slow, that no faster implementation is possible, or that every
 Homura tensor/shape has been exhaustively optimized. HexKL remains a possible
 production dependency under its own license, as explicitly authorized by the user.
 
+The subsequent [existing-engine survey](hexagon-integer-engines.md) identifies
+QNN-based W8A8 and LPBQ paths. The [matched HMX/HVX measurements](../benchmarks/2026-10-11-hmx-hvx.md)
+evaluate the existing FP16-HMX route separately. Neither changes the conclusion
+about this particular integer Micro prototype or proves a general failure of
+blockwise quantization on Hexagon.
+
 ## Baseline and isolation
 
 First established a [non-profiled, fixed-token real-model baseline](../benchmarks/2026-10-10-homura-baseline.md):

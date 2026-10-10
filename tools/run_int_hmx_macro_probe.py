@@ -17,8 +17,8 @@ BINARY = ROOT + "/int_hmx_macro_probe"
 REAL_TENSOR = None
 
 
-def run_case(serial, directory, sink, bits, batch, n, k, repeats, pad):
-    label = f"i{bits}-b{batch}-n{n}-k{k}" + (("-" + pad) if isinstance(pad, str) else "-pad64" if pad else "")
+def run_case(serial, directory, sink, bits, batch, n, k, repeats, pad, case_tag="", profile=False):
+    label = f"i{bits}-b{batch}-n{n}-k{k}" + (("-" + pad) if isinstance(pad, str) else "-pad64" if pad else "") + case_tag
     monitor.cooldown(serial, sink, "idle-" + label, minimum=5)
     args = [BINARY, str(bits), str(batch), str(n), str(k), str(repeats)]
     if pad: args.append(pad if isinstance(pad, str) else "pad64")
@@ -27,7 +27,8 @@ def run_case(serial, directory, sink, bits, batch, n, k, repeats, pad):
         from run_homura_kernel_probe import FILES, ROOT as MODEL_ROOT
         name, model_hash = FILES["Q8_0" if bits == 8 else "Q4_K_M"]
         args += [MODEL_ROOT + "/models/" + name, REAL_TENSOR]
-    dsp_path = "/data/local/tmp/llama.cpp/lib" if pad == "ggml" else ROOT
+    if profile: args.append("profile")
+    dsp_path = "/data/local/tmp/llama.cpp/lib" if isinstance(pad, str) and pad.startswith("ggml") else ROOT
     command = f"cd {ROOT} && export LD_LIBRARY_PATH={ROOT}:/data/local/tmp/llama.cpp/lib:/vendor/lib64 ADSP_LIBRARY_PATH={dsp_path} GGML_HEXAGON_PROFILE=0 GGML_HEXAGON_VERBOSE=0 GGML_SCHED_DEBUG=0; exec " + shlex.join(args)
     process = subprocess.Popen([monitor.ADB, "-s", serial, "shell", command], stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", bufsize=1)
@@ -69,12 +70,13 @@ def run_case(serial, directory, sink, bits, batch, n, k, repeats, pad):
     thread.join(timeout=5)
     if thread.is_alive(): raise RuntimeError("Log reader did not finish")
     result = {"label": label, "bits": bits, "batch": batch, "n": n, "k": k, "repeats": repeats,
-              "mode": pad if isinstance(pad, str) else "raw", "pad64": pad is True or pad in ("raw", "scaled"), "tensor": REAL_TENSOR, "model_sha256": model_hash,
+              "mode": pad if isinstance(pad, str) else "raw", "pad64": pad is True or pad in ("raw", "scaled"), "tensor": REAL_TENSOR, "model_sha256": model_hash, "profile": profile,
               "exit_code": process.returncode, "abort": abort, "parse_errors": errors, "records": records,
               "raw_sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     with (directory / "runs.jsonl").open("a", encoding="utf-8") as output: output.write(json.dumps(result) + "\n")
     print("FINISH", label, "exit", process.returncode, "abort", abort, "directory", directory, flush=True)
     if process.returncode or abort or errors: raise RuntimeError("Integer probe failed; see retained raw evidence")
+    return result
 
 
 def main():

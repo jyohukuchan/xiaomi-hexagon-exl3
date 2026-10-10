@@ -28,6 +28,11 @@ class IntegerProbeTests(unittest.TestCase):
         r = fixture(); del r["records"][0]["api_batch"]
         with self.assertRaises(ValueError): analysis.audit(r)
 
+    def test_profile_is_not_a_timing_baseline(self):
+        r = fixture(); r["profile"] = True; r["records"][0]["profile"] = True
+        with self.assertRaises(ValueError): analysis.audit(r)
+        self.assertTrue(analysis.audit(r, allow_profile=True)["profile"])
+
     def test_rejects_failure_and_abort(self):
         for key, value in (("exit_code", 1), ("abort", "thermal"), ("parse_errors", ["bad JSON"])):
             r = fixture(); r[key] = value

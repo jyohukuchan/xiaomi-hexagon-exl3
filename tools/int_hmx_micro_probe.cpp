@@ -10,6 +10,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <iostream>
 #include <fstream>
 #include <memory>
@@ -46,20 +47,32 @@ struct Session {
     ~Session() { if (handle) int_hmx_iface_close(handle); }
 };
 int main(int argc, char ** argv) try {
-    require(argc == 7 || argc == 9, "Usage: int_hmx_micro_probe BITS BATCH N K REPEATS raw|scaled|ggml [GGUF TENSOR]");
+    require(argc == 7 || argc == 9 || argc == 10, "Usage: int_hmx_micro_probe BITS BATCH N K REPEATS raw|scaled|ggml|ggml-hmx|ggml-hvx [GGUF TENSOR [profile]]");
     const int bits = std::stoi(argv[1]), batch = std::stoi(argv[2]), n = std::stoi(argv[3]), k = std::stoi(argv[4]), repeats = std::stoi(argv[5]);
-    const bool baseline = std::string(argv[6]) == "ggml";
+    const std::string mode = argv[6];
+    const bool baseline = mode == "ggml" || mode == "ggml-hmx" || mode == "ggml-hvx";
+    const bool force_hmx = mode == "ggml-hmx", force_hvx = mode == "ggml-hvx";
+    const bool profile = argc == 10 && std::string(argv[9]) == "profile";
+    require(argc != 10 || (baseline && profile), "Invalid profile mode");
     const bool scaled = baseline || std::string(argv[6]) == "scaled";
     require(scaled || std::string(argv[6]) == "raw", "invalid mode");
-    require(!baseline || argc == 9, "GGML baseline requires a real tensor");
+    require(!baseline || argc >= 9, "GGML baseline requires a real tensor");
     require((bits == 4 || bits == 8) && batch > 0 && batch <= 512 && n >= 32 && n <= 6144 && n % 32 == 0 &&
         k >= 32 && k <= 14336 && k % 32 == 0 && repeats > 0 && repeats <= 100, "invalid dimensions");
     const int m = (batch + 63) / 64 * 64, groups = k / 32;
+    // Pinned llama.cpp only admits HMX for M>4; expose padding instead of
+    // pretending a batch-1 auto-selected HVX run measured HMX.
+    const int compute_batch = force_hmx ? (batch + 31) / 32 * 32 : batch;
+    if (baseline) {
+        require(setenv("GGML_HEXAGON_NHMX", force_hvx ? "0" : "1", 1) == 0, "HMX environment");
+        require(setenv("GGML_HEXAGON_MM_SELECT", force_hvx ? "1" : "2", 1) == 0, "Matrix route environment");
+        require(setenv("GGML_HEXAGON_PROFILE", profile ? "1" : "0", 1) == 0, "Profiling environment");
+    }
     std::cout.setf(std::ios::unitbuf);
     signal(SIGINT, handler); signal(SIGTERM, handler);
-    emit({{"event", "init"}, {"pid", getpid()}, {"bits", bits}, {"batch", batch}, {"api_batch", baseline ? batch : m},
+    emit({{"event", "init"}, {"pid", getpid()}, {"bits", bits}, {"batch", batch}, {"api_batch", baseline ? compute_batch : m},
         {"n", n}, {"k", k}, {"repeats", repeats}, {"scaled", scaled}, {"engine", baseline ? "ggml" : "micro"}, {"storage_batch", m},
-        {"tensor", argc == 9 ? argv[8] : "synthetic"}});
+        {"tensor", argc >= 9 ? argv[8] : "synthetic"}, {"route", force_hmx ? "hmx" : force_hvx ? "hvx" : "auto"}, {"profile", profile}});
     Buffer x(size_t(m) * k), w(size_t(n) * k), scales((size_t(n) * groups * 2 + size_t(m) * groups) * 4), y(size_t(m) * n * 4 + 4096);
     auto * wi = reinterpret_cast<int8_t *>(w.p);
     auto * ws = reinterpret_cast<float *>(scales.p), * wo = ws + size_t(n) * groups, * as = wo + size_t(n) * groups;
@@ -74,7 +87,7 @@ int main(int argc, char ** argv) try {
     for (size_t i = 0; i < size_t(m) * groups; ++i) as[i] = i / groups < size_t(batch) ? float(1 + random_u32(seed) % 31) / 1024 : 0;
     ggml_type tensor_type = GGML_TYPE_F32;
     std::vector<unsigned char> tensor_data;
-    if (argc == 9) {
+    if (argc >= 9) {
         ggml_context * metadata = nullptr;
         const auto file = std::unique_ptr<gguf_context, decltype(&gguf_free)>(gguf_init_from_file(argv[7], {true, &metadata}), gguf_free);
         const auto tensors = std::unique_ptr<ggml_context, decltype(&ggml_free)>(metadata, ggml_free);
@@ -159,13 +172,14 @@ int main(int argc, char ** argv) try {
         require(bool(backend), "HTP0 unavailable");
         const auto ctx = std::unique_ptr<ggml_context, decltype(&ggml_free)>(ggml_init({4 * 1024 * 1024, nullptr, true}), ggml_free);
         auto * wt = ggml_new_tensor_2d(ctx.get(), tensor_type, k, n);
-        auto * xt = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, k, batch);
+        auto * xt = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, k, compute_batch);
         auto * yt = ggml_mul_mat(ctx.get(), wt, xt);
+        ggml_set_name(wt, "route_weights"); ggml_set_name(xt, "route_activations"); ggml_set_name(yt, "route_output");
         require(ggml_backend_supports_op(backend.get(), yt), "HTP operation not supported");
         const auto buffer = std::unique_ptr<ggml_backend_buffer, decltype(&ggml_backend_buffer_free)>(ggml_backend_alloc_ctx_tensors(ctx.get(), backend.get()), ggml_backend_buffer_free);
         require(bool(buffer), "HTP allocation");
-        std::vector<float> xf(size_t(batch) * k);
-        for (int r = 0; r < batch; ++r) for (int j = 0; j < k; ++j) xf[size_t(r) * k + j] = (int(x.p[size_t(r) * k + j]) - 128) * as[r * groups + j / 32];
+        std::vector<float> xf(size_t(compute_batch) * k);
+        for (int r = 0; r < compute_batch; ++r) for (int j = 0; j < k; ++j) xf[size_t(r) * k + j] = (int(x.p[size_t(r) * k + j]) - 128) * as[r * groups + j / 32];
         ggml_backend_tensor_set(wt, tensor_data.data(), 0, tensor_data.size());
         ggml_backend_tensor_set(xt, xf.data(), 0, xf.size() * 4);
         auto * graph = ggml_new_graph_custom(ctx.get(), 2048, false); ggml_build_forward_expand(graph, yt);
@@ -176,8 +190,8 @@ int main(int argc, char ** argv) try {
         end = now();
         require(!stopped, "Interrupted GGML trial");
         compute = uint64((end - begin) * 19200000);
-        ggml_backend_tensor_get(yt, y.p, 0, outputs * 4);
-        std::memset(y.p + outputs * 4, 0, size_t(m - batch) * n * 4);
+        ggml_backend_tensor_get(yt, y.p, 0, size_t(compute_batch) * n * 4);
+        std::memset(y.p + size_t(compute_batch) * n * 4, 0, size_t(m - compute_batch) * n * 4);
         arch = 75;
     } else {
         Session session;

@@ -29,6 +29,12 @@ separate real-model speed from raw integer capacity. HexKL integer APIs work on
 this v75 phone, but the current block-scaled prototype is not enabled in inference.
 HexKL is an optional, separately licensed dependency, not MIT-licensed project code.
 
+The [existing integer-engine survey](docs/validation/hexagon-integer-engines.md)
+identifies QNN-based W8A8, W8A16 and LPBQ alternatives. The
+[matched HMX versus HVX comparison](docs/benchmarks/2026-10-11-hmx-hvx.md)
+measures both existing GGUF routes across batches without confusing FP16 HMX
+acceleration with native integer-HMX arithmetic.
+
 ## Validated hardware
 
 - Xiaomi 14 Ultra global (`24030PN60G`, `aurora`)

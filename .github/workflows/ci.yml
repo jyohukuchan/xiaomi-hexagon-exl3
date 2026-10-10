@@ -29,6 +29,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_homura_baseline.py'
       - name: Test integer-HMX probe validation
         run: python3 -m unittest discover -s tests -p 'test_int_hmx_probe.py'
+      - name: Test matched HMX/HVX comparison validation
+        run: python3 -m unittest discover -s tests -p 'test_hmx_hvx_compare.py'
       - name: Compile patched graph runtime
         run: |
           git -C third_party/llama.cpp apply ../../patches/llama-exl3.patch
