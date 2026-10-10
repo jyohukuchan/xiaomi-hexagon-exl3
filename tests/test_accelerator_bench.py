@@ -49,6 +49,28 @@ def valid_case(operation="mat"):
 
 
 class AcceleratorTests(unittest.TestCase):
+    def test_original_case_plans_unchanged(self):
+        self.assertEqual(len(runner.make_cases("short")), 48)
+        self.assertEqual(len(runner.make_cases("sustained")), 12)
+        self.assertEqual(len(runner.make_cases("copy")), 8)
+        self.assertEqual(len(runner.make_cases("pilot")), 2)
+        self.assertEqual(runner.make_cases("short")[20], ("mat", "GPUOpenCL", "q8_0", 4, 0.25, 1))
+
+    def test_targeted_q8_power_plan(self):
+        cases = runner.make_cases("sustained", ["q8_0"], [4, 16, 64], 2)
+        self.assertEqual(len(cases), 12)
+        for offset, batch in enumerate((4, 16, 64)):
+            group = cases[offset * 4:offset * 4 + 4]
+            self.assertEqual([c[1] for c in group], ["GPUOpenCL", "HTP0", "HTP0", "GPUOpenCL"])
+            self.assertTrue(all(c[2:] == ("q8_0", batch, 30, 0.25) for c in group))
+
+    def test_invalid_case_selection(self):
+        for stage, formats, batches, repeats in (("copy", ["q8_0"], None, 1), ("sustained", None, [0], 1),
+                                                ("sustained", None, [513], 1), ("sustained", None, [4, 4], 1),
+                                                ("sustained", ["q8_0", "q8_0"], None, 1), ("sustained", None, None, 0)):
+            with self.assertRaises(ValueError):
+                runner.make_cases(stage, formats, batches, repeats)
+
     def test_fresh_hal_not_cached(self):
         row = runner.telemetry(thermal_dump())
         self.assertEqual(row["npu_max_C"], 42)
@@ -120,12 +142,26 @@ class AcceleratorTests(unittest.TestCase):
             (directory / (row["label"] + ".log")).write_bytes(b"raw log")
             (directory / "telemetry.jsonl").write_text("\n".join(json.dumps(s) for s in samples))
             (directory / "results.jsonl").write_text(json.dumps(row))
-            self.assertEqual(analyzer.summarize(directory)["accepted_count"], 1)
+            summary = analyzer.summarize(directory)
+            self.assertEqual(summary["accepted_count"], 1)
+            self.assertEqual(summary["cases"][0]["device_gflops_per_W"], row["records"][2]["gflops"] / 2)
+            self.assertEqual(summary["aggregate"][0]["battery_mean_W_mean"], 2)
             self.assertEqual(analyzer.summarize(directory, (1, 2))["accepted_count"], 0)
             row["battery_mean_W"] = 1
             (directory / "results.jsonl").write_text(json.dumps(row))
             with self.assertRaises(ValueError):
                 analyzer.summarize(directory)
+
+    def test_power_aggregate_preserves_repeat_range(self):
+        cases = [{"operation": "mat", "backend": "GPUOpenCL", "format": "q8_0", "batch": 16, "duty": 0.25,
+                  "us_per_op": 100, "gflops": 100, "effective_GBps": 5,
+                  "battery_mean_W": power, "device_gflops_per_W": 100 / power} for power in (2, 4)]
+        result = analyzer.aggregate(cases)[0]
+        self.assertEqual(result["replicates"], 2)
+        self.assertEqual(result["battery_mean_W_mean"], 3)
+        self.assertEqual(result["device_gflops_per_W_mean"], 37.5)
+        self.assertEqual(result["device_gflops_per_W_min"], 25)
+        self.assertEqual(result["device_gflops_per_W_max"], 50)
 
 
 if __name__ == "__main__":

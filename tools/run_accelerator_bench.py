@@ -199,13 +199,53 @@ def run_case(serial, directory, sink, index, operation, backend, fmt, batch, sec
           "battery_W=", result["battery_mean_W"], flush=True)
 
 
+def make_cases(stage, formats=None, batches=None, repeats=1):
+    if not 1 <= repeats <= 4:
+        raise ValueError("Repeats must be in [1,4]")
+    if stage in ("copy", "pilot"):
+        if formats is not None or batches is not None or repeats != 1:
+            raise ValueError("Matrix selection/repeats are only supported for short/sustained/smoke")
+        if stage == "pilot":
+            return [("mat", b, "q8_0", 512, 5, 0.5) for b in ("GPUOpenCL", "HTP0")]
+        return [("copy", b, f, 1, 3, 1) for f in ("contiguous", "transpose") for b in ("GPUOpenCL", "HTP0", "HTP0", "GPUOpenCL")]
+    if stage not in ("short", "sustained", "smoke"):
+        raise ValueError("Unknown stage")
+    formats = tuple(formats) if formats is not None else ("f16", "q8_0", "q4_0")
+    batches = tuple(batches) if batches is not None else ((1, 4, 8, 512) if stage == "short" else (1, 512))
+    if not formats or len(set(formats)) != len(formats) or not set(formats) <= {"f16", "q8_0", "q4_0"}:
+        raise ValueError("Invalid or duplicate weight formats")
+    if not batches or len(set(batches)) != len(batches) or any(not isinstance(b, int) or not 1 <= b <= 512 for b in batches):
+        raise ValueError("Batches must be unique integers in [1,512]")
+    cases = []
+    for fmt in formats:
+        for batch in batches:
+            backends = ("GPUOpenCL", "HTP0", "HTP0", "GPUOpenCL") if stage == "short" else ("GPUOpenCL", "HTP0")
+            seconds = 30 if stage == "sustained" else (1 if batch == 512 else 2)
+            if stage != "sustained" and (fmt == "q4_0" or fmt == "q8_0" and batch > 1):
+                seconds = 0.25
+            duty = 0.25 if stage == "sustained" else 1
+            for repeat in range(repeats):
+                order = backends[::-1] if repeat % 2 else backends
+                cases.extend(("mat", b, fmt, batch, seconds, duty) for b in order)
+    return cases
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", default="192.168.1.135:5555")
     parser.add_argument("--stage", choices=("smoke", "short", "sustained", "copy", "pilot"), required=True)
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--formats", nargs="+", choices=("f16", "q8_0", "q4_0"))
+    parser.add_argument("--batches", nargs="+", type=int)
+    parser.add_argument("--repeats", type=int, default=1, help="Repeat each backend pair, reversing order on alternate repeats")
     args = parser.parse_args()
+    try:
+        cases = make_cases(args.stage, args.formats, args.batches, args.repeats)
+        if not 0 <= args.start_index < len(cases):
+            raise ValueError("Start index outside the case list")
+    except ValueError as error:
+        parser.error(str(error))
     active = shell(args.serial, "pidof accelerator_bench test-backend-ops llama-server llama-completion gpu_npu_probe || true").strip()
     if active:
         raise RuntimeError("Concurrent project process: " + active)
@@ -219,24 +259,9 @@ def main():
         (directory / "metadata.json").write_text(json.dumps({"stage": args.stage, "serial": args.serial,
             "initial": initial, "telemetry_command": TELEMETRY_COMMAND, "battery_measurement": "signed ibat_A * vbat_V; whole-device estimate, not accelerator rail",
         "sampling_target_seconds": 0.5,
+        "cases": cases,
+        "runner_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "benchmark_source_sha256": hashlib.sha256((Path(__file__).parent / "accelerator_bench.cpp").read_bytes()).hexdigest()}, indent=2), encoding="utf-8")
-        cases = []
-        if args.stage == "pilot":
-            cases = [("mat", b, "q8_0", 512, 5, 0.5) for b in ("GPUOpenCL", "HTP0")]
-        elif args.stage == "copy":
-            cases = [("copy", b, f, 1, 3, 1) for f in ("contiguous", "transpose") for b in ("GPUOpenCL", "HTP0", "HTP0", "GPUOpenCL")]
-        else:
-            for fmt in ("f16", "q8_0", "q4_0"):
-                batches = (1, 4, 8, 512) if args.stage == "short" else (1, 512)
-                for batch in batches:
-                    backends = ("GPUOpenCL", "HTP0", "HTP0", "GPUOpenCL") if args.stage == "short" else ("GPUOpenCL", "HTP0")
-                    seconds = 30 if args.stage == "sustained" else (1 if batch == 512 else 2)
-                    if args.stage != "sustained" and (fmt == "q4_0" or fmt == "q8_0" and batch > 1):
-                        seconds = 0.25
-                    duty = 0.25 if args.stage == "sustained" else 1
-                    cases.extend(("mat", b, fmt, batch, seconds, duty) for b in backends)
-        if not 0 <= args.start_index < len(cases):
-            raise ValueError("Start index outside the case list")
         for index, case in enumerate(cases):
             if index < args.start_index:
                 continue

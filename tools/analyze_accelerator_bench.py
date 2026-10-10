@@ -105,6 +105,11 @@ def summarize(directory, index_range=None):
         elapsed = windows[-1]["boot_s"] - start["boot_s"]
         out["boottime_elapsed_seconds"] = elapsed
         out["boottime_gflops"] = start["flops_per_op"] * result["ops"] / elapsed / 1e9
+        out["measured_compute_fraction"] = result["active_seconds"] / result["seconds"]
+        if "duplicates" in start:
+            graphs = result["ops"] / positive(start["duplicates"])
+            out["mean_active_graph_ms"] = result["active_seconds"] / graphs * 1000
+            out["mean_noncompute_graph_ms"] = (result["seconds"] - result["active_seconds"]) / graphs * 1000
         if row["operation"] == "mat":
             validations = [r for r in row["records"] if r["event"] == "validation"]
             out["max_validation_nmse"] = max(v["nmse"] for v in validations)
@@ -131,6 +136,7 @@ def summarize(directory, index_range=None):
             out["first5_gflops"], out["last5_gflops"] = rate(first), rate(last)
             out["last_vs_first_percent"] = (rate(last) / rate(first) - 1) * 100
             out["estimated_device_joules_per_op"] = row["battery_mean_W"] * result["us_per_op"] / 1e6
+            out["device_gflops_per_W"] = result["gflops"] / positive(row["battery_mean_W"])
         accepted.append(out)
     metadata_path = directory / "metadata.json"
     source_hash = json.loads(metadata_path.read_text())["benchmark_source_sha256"] if metadata_path.exists() else None
@@ -145,9 +151,12 @@ def aggregate(cases):
         grouped.setdefault(key, []).append(row)
     result = []
     for key, group in grouped.items():
+        metrics = ["us_per_op", "gflops", "effective_GBps"]
+        metrics.extend(metric for metric in ("battery_mean_W", "idle_mean_W", "battery_increment_W", "device_gflops_per_W", "estimated_device_joules_per_op")
+                       if all(metric in row for row in group))
         result.append({"operation": key[0], "backend": key[1], "format": key[2], "batch": key[3], "duty": key[4], "replicates": len(group),
                           **{metric + suffix: function(r[metric] for r in group)
-                             for metric in ("us_per_op", "gflops", "effective_GBps")
+                             for metric in metrics
                              for suffix, function in (("_mean", statistics.mean), ("_min", min), ("_max", max))}})
     return result
 

@@ -15,6 +15,9 @@ A separate [matched GPU/NPU benchmark](docs/benchmarks/2026-10-10-gpu-npu.md)
 compares FP16/Q8_0/Q4_0 backend operations, effective bandwidth, and unplugged
 whole-device battery power. It does not measure EXL3 inference or accelerator-only watts.
 
+The [Q8_0 batch-sweep follow-up](docs/benchmarks/2026-10-10-q8-batch-sweep.md)
+adds batches 4, 16 and 64 with reversed-order repeats and per-condition power ranges.
+
 ## Validated hardware
 
 - Xiaomi 14 Ultra global (`24030PN60G`, `aurora`)
