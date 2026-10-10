@@ -21,6 +21,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_context_probe.py'
       - name: Test GPU probe validation
         run: python3 -m unittest discover -s tests -p 'test_gpu_probe.py'
+      - name: Test accelerator benchmark validation
+        run: python3 -m unittest discover -s tests -p 'test_accelerator_bench.py'
       - name: Compile patched graph runtime
         run: |
           git -C third_party/llama.cpp apply ../../patches/llama-exl3.patch

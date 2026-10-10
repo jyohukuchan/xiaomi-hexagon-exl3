@@ -38,8 +38,12 @@ Cold/short-run kernel selection:
 
 | Operation | Tensor | Traffic counted | Time | Effective bandwidth |
 |---|---:|---:|---:|---:|
-| Contiguous FP16 copy | 32 MiB | 64 MiB read + write | 1550.18 us | 40.36 GB/s |
-| Transposed FP16 copy | 4096×4096 / 32 MiB | 64 MiB read + write | 118159.48 us | 0.53 GB/s |
+| Contiguous FP16 copy | 32 MiB | 64 MiB read + write | 1550.18 us | 40.36 GiB/s |
+| Transposed FP16 copy | 4096×4096 / 32 MiB | 64 MiB read + write | 118159.48 us | 0.53 GiB/s |
+
+Correction (2026-10-10): the original copy harness reports binary GiB/s, not
+decimal GB/s. Contiguous copy is approximately 43.29 GB/s. The packed-weight
+bandwidth calculations below already use decimal GB/s and are unchanged.
 
 The stock performance suite's approximately 384 MiB transposed-copy cases stalled for minutes in FastRPC completion. A temporary 32 MiB test case was used instead. The source change was reverted after measurement.
 

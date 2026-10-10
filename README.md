@@ -11,6 +11,10 @@ An independent [GPU/Hexagon interoperability and EXL3 dequantization probe](docs
 
 [Calibrated PMU comparisons](docs/validation/gpu-npu-pmu.md) show similar primary-AXI request counts for CPU/GPU-produced buffers and a working cache-hit control, but do not identify Direct Link use.
 
+A separate [matched GPU/NPU benchmark](docs/benchmarks/2026-10-10-gpu-npu.md)
+compares FP16/Q8_0/Q4_0 backend operations, effective bandwidth, and unplugged
+whole-device battery power. It does not measure EXL3 inference or accelerator-only watts.
+
 ## Validated hardware
 
 - Xiaomi 14 Ultra global (`24030PN60G`, `aurora`)
@@ -34,7 +38,7 @@ Matrix shape: `[4096, 14336] × [14336, batch]`, with F32 activations.
 Additional observations:
 
 - Effective sequential packed-weight bandwidth: approximately 44–48 GB/s
-- Contiguous FP16 device copy: 40.36 GB/s
+- Contiguous FP16 device copy: 40.36 GiB/s (43.29 GB/s)
 - Batch 1 Q4_0 selects an HVX kernel
 - Batch 512 selects HMX kernels
 - A short sustained load reduced Q4_0 batch-512 throughput from 6.61 to 5.70 TFLOPS as the NPU thermal sensors heated up
