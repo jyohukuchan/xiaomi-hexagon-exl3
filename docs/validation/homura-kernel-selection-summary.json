@@ -1,0 +1,125 @@
+{
+  "dataset": "homura-kernels-20261010-212155",
+  "model_revision": "40a26e36b43c64c9495b71ebccb59fc230fed6b0",
+  "baseline_revision": "a11f57ba93797579a5d1855ee216a31f10242676",
+  "models": [
+    {
+      "format": "Q4_K_M",
+      "model_sha256": "3fc56945f1db4c2b91b18ac9f4061b354d51c226a6fdd9ea95e72a927f13a675",
+      "raw_sha256": "241cff111d93e8946d51574b90183f7cfcdfad4dd469ea9dc2aad39a0308bcd7",
+      "executed_matrix_profile_records": 411,
+      "active_weight_tensors": 187,
+      "active_weight_types": {
+        "q6_K": 25,
+        "q4_K": 162
+      },
+      "scheduler_matrix_nodes": {
+        "HTP0": 1496
+      },
+      "groups": [
+        {
+          "input_columns": 1,
+          "path": "hvx-tiled",
+          "first_weight_type": "q4_K",
+          "records": 225
+        },
+        {
+          "input_columns": 1,
+          "path": "hvx-tiled",
+          "first_weight_type": "q6_K",
+          "records": 52
+        },
+        {
+          "input_columns": 30,
+          "path": "hmx-tiled",
+          "first_weight_type": "q4_K",
+          "records": 111
+        },
+        {
+          "input_columns": 30,
+          "path": "hmx-tiled",
+          "first_weight_type": "q6_K",
+          "records": 23
+        }
+      ],
+      "examples": [
+        {
+          "op": "MUL_MAT",
+          "names": "blk.0.attn_qkv.weight x attn_norm-0 -> node_15",
+          "input_columns": 30,
+          "weights": {
+            "blk.0.attn_qkv.weight": "q6_K"
+          },
+          "path": "hmx-tiled",
+          "usecs": 459,
+          "cycles": 892037
+        },
+        {
+          "op": "MUL_MAT_NX",
+          "names": "blk.23.ffn_gate.weight x blk.23.ffn_up.weight x attn_post_norm-23 -> ffn_up-23",
+          "input_columns": 1,
+          "weights": {
+            "blk.23.ffn_gate.weight": "q4_K",
+            "blk.23.ffn_up.weight": "q4_K"
+          },
+          "path": "hvx-tiled",
+          "usecs": 383,
+          "cycles": 749206
+        }
+      ]
+    },
+    {
+      "format": "Q8_0",
+      "model_sha256": "e3aa4850c1f4779328af5d721383bb5785dfdd7836f5a82976336c21178c7754",
+      "raw_sha256": "bc3ced42864cc592a7663bae1329e7dac1fd0c564745c1aab6ed9b518f47dfc5",
+      "executed_matrix_profile_records": 399,
+      "active_weight_tensors": 187,
+      "active_weight_types": {
+        "q8_0": 187
+      },
+      "scheduler_matrix_nodes": {
+        "HTP0": 1496
+      },
+      "groups": [
+        {
+          "input_columns": 1,
+          "path": "hvx-tiled",
+          "first_weight_type": "q8_0",
+          "records": 269
+        },
+        {
+          "input_columns": 30,
+          "path": "hmx-tiled",
+          "first_weight_type": "q8_0",
+          "records": 130
+        }
+      ],
+      "examples": [
+        {
+          "op": "MUL_MAT",
+          "names": "blk.0.attn_qkv.weight x attn_norm-0 -> node_15",
+          "input_columns": 30,
+          "weights": {
+            "blk.0.attn_qkv.weight": "q8_0"
+          },
+          "path": "hmx-tiled",
+          "usecs": 435,
+          "cycles": 845450
+        },
+        {
+          "op": "MUL_MAT_NX",
+          "names": "blk.23.ffn_gate.weight x blk.23.ffn_up.weight x attn_post_norm-23 -> ffn_up-23",
+          "input_columns": 1,
+          "weights": {
+            "blk.23.ffn_gate.weight": "q8_0",
+            "blk.23.ffn_up.weight": "q8_0"
+          },
+          "path": "hvx-tiled",
+          "usecs": 623,
+          "cycles": 1209298
+        }
+      ]
+    }
+  ],
+  "interpretation_limit": "Runtime logs select HMX/HVX paths; arithmetic interpretation additionally requires matching source/binary inspection. This is not an instruction-by-instruction hardware trace or translation-quality evaluation."
+}

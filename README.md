@@ -18,6 +18,11 @@ whole-device battery power. It does not measure EXL3 inference or accelerator-on
 The [Q8_0 batch-sweep follow-up](docs/benchmarks/2026-10-10-q8-batch-sweep.md)
 adds batches 4, 16 and 64 with reversed-order repeats and per-condition power ranges.
 
+[Real Homura GGUF profiles](docs/validation/homura-kernel-selection.md) confirm
+that Q4_K_M/Q8_0 run on Hexagon: multi-column matrix work selects HMX FP16,
+while single-column work selects HVX byte-integer dot products. Stored Q4/Q8
+does not imply use of native HMX INT4/INT8 matrix arithmetic.
+
 ## Validated hardware
 
 - Xiaomi 14 Ultra global (`24030PN60G`, `aurora`)
