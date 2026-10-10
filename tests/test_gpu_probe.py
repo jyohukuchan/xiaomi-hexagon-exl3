@@ -32,6 +32,24 @@ def dequant_log():
     return "\n".join(lines + ["PASS mode=dequant"]) + "\n"
 
 
+def pmu_log(event_set=0):
+    events = probe.PMU_EVENTS[event_set]
+    lines = ["pmu_schema version=2 report_bytes=544 set=" + str(event_set) +
+             "".join(f" e{i}={event}" for i, event in enumerate(events))]
+    for size in probe.SIZES:
+        for source in ("cpu", "gpu"):
+            for mode in ("empty", "hvx", "scalar", "hvx_noinv"):
+                for phase in ("arrival", "cold", "warm", "outer"):
+                    loads = size // 128 if mode == "hvx" and phase != "arrival" else 0
+                    axi = size // 128 + 3 if mode == "hvx" and phase in ("cold", "outer") else 0
+                    counters = "".join(f" c{i}={loads + 1 if event == 0x118 else axi if event == 0x40 else 0}"
+                                       for i, event in enumerate(events))
+                    key = f"set={event_set} src={source} mode={mode} bytes={size} phase={phase}"
+                    lines.append(f"pmu_sample {key} index=0 usec=10 cycles=100{counters} mismatches=0")
+                    lines.append(f"pmu_summary {key} samples=1 p50_us=10 p95_us=10{counters} mismatches=0")
+    return "\n".join(lines + ["PASS mode=pmu"]) + "\n"
+
+
 class ProbeAuditTests(unittest.TestCase):
     def test_complete_interop(self):
         self.assertEqual(probe.audit(interop_log())["sample_count"], 7)
@@ -67,6 +85,50 @@ class ProbeAuditTests(unittest.TestCase):
     def test_require_cuda_fixtures(self):
         with self.assertRaises(ValueError):
             probe.audit(dequant_log(), require_fixtures=True)
+
+    def test_pmu_complete_all_banks(self):
+        for bank in range(4):
+            result = probe.audit(pmu_log(bank))
+            self.assertEqual(result["sample_count"], 224)
+            self.assertTrue(result["calibration"])
+
+    def test_pmu_reject_arch_neutral_ids(self):
+        with self.assertRaises(ValueError):
+            probe.audit(pmu_log().replace("e0=63", "e0=32823"))
+
+    def test_pmu_reject_missing_phase(self):
+        with self.assertRaises(ValueError):
+            probe.audit("\n".join(line for line in pmu_log().splitlines() if "phase=warm" not in line))
+
+    def test_pmu_reject_summary_forgery(self):
+        with self.assertRaises(ValueError):
+            probe.audit(pmu_log().replace("p50_us=10", "p50_us=9", 1))
+
+    def test_pmu_reject_uncalibrated_zero_loads(self):
+        lines = []
+        for line in pmu_log().splitlines():
+            if line.startswith(("pmu_sample ", "pmu_summary ")):
+                line = " ".join("c7=0" if token.startswith("c7=") else token for token in line.split())
+            lines.append(line)
+        with self.assertRaises(ValueError):
+            probe.audit("\n".join(lines))
+
+    def test_pmu_reject_mismatched_counter_banks(self):
+        lines = []
+        for line in pmu_log(3).splitlines():
+            if line.startswith(("pmu_sample ", "pmu_summary ")):
+                line = " ".join("c3=0" if token.startswith("c3=") else token for token in line.split())
+            lines.append(line)
+        with self.assertRaises(ValueError):
+            probe.audit("\n".join(lines))
+
+    def test_pmu_records_configuration_rejection(self):
+        text = pmu_log().replace("PASS mode=pmu", "pmu_rejected set=0 src=gpu mode=empty bytes=128 index=0 attempt=0 flags=31\nPASS mode=pmu")
+        self.assertEqual(probe.audit(text)["rejected_count"], 1)
+
+    def test_pmu_rejects_old_unguarded_abi(self):
+        with self.assertRaises(ValueError):
+            probe.audit(pmu_log().replace("version=2 report_bytes=544", "version=1 report_bytes=528"))
 
 
 if __name__ == "__main__":

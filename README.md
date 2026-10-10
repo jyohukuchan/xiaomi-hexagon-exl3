@@ -9,6 +9,8 @@ The first end-to-end target is [IndexTeam/Index-Translate-2B](https://huggingfac
 
 An independent [GPU/Hexagon interoperability and EXL3 dequantization probe](docs/validation/gpu-npu-interop.md) now passes on Adreno 750 using OpenCL and shared DMA-BUF allocations. This does not switch model execution to the GPU, establish Direct Link access, or demonstrate an inference speedup.
 
+[Calibrated PMU comparisons](docs/validation/gpu-npu-pmu.md) show similar primary-AXI request counts for CPU/GPU-produced buffers and a working cache-hit control, but do not identify Direct Link use.
+
 ## Validated hardware
 
 - Xiaomi 14 Ultra global (`24030PN60G`, `aurora`)

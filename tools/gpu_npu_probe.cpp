@@ -7,6 +7,7 @@
 #include <remote.h>
 #include "gpu_iface.h"
 #include "exl3_codec.h"
+#include "gpu-pmu.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -202,6 +203,106 @@ static double percentile(std::vector<double> values, double fraction) {
     if (values.empty()) throw std::runtime_error("No samples");
     std::sort(values.begin(), values.end());
     return values[size_t(fraction * double(values.size() - 1))];
+}
+
+static void pmu_probe(OpenCL & cl, Program & program, unsigned repeats, unsigned event_set) {
+    if (event_set >= GPU_PMU_EVENT_SETS || repeats > 101) throw std::runtime_error("Invalid PMU settings");
+    DSP dsp;
+    Kernel fill(program, "fill_pattern");
+    const char * source_names[] = {"cpu", "gpu"};
+    const char * mode_names[] = {"empty", "hvx", "scalar", "hvx_noinv"};
+    const char * phase_names[] = {"arrival", "cold", "warm", "outer"};
+    std::cout << "pmu_schema version=" << GPU_PMU_VERSION << " report_bytes=" << sizeof(gpu_pmu_report)
+              << " set=" << event_set;
+    for (unsigned i = 0; i < 8; ++i) std::cout << " e" << i << '=' << gpu_pmu_events[event_set][i];
+    std::cout << '\n';
+    for (size_t bytes : {size_t(128), size_t(4096), size_t(32768), size_t(262144), size_t(1048576), size_t(8388608), size_t(33554432)}) {
+        Buffer input(cl, bytes), output(cl, sizeof(gpu_pmu_report));
+        const cl_uint count = cl_uint(bytes / 4);
+        fill.arg(0, input.object); fill.arg(1, count);
+        for (unsigned mode = 0; mode < 4; ++mode) {
+            std::vector<double> times[2][4], counters[2][4][8];
+            for (unsigned iteration = 0; iteration < repeats + 3; ++iteration) {
+                // CPU/GPU, GPU/CPU ordering alternates to reduce slow drift bias.
+                for (unsigned order = 0; order < 2; ++order) {
+                    const unsigned source = order ^ (iteration & 1u);
+                    for (unsigned attempt = 0; ; ++attempt) {
+                    const cl_uint seed = 0x13bac907u + iteration * 71317u + source * 1793u + mode * 997u + attempt * 1031u;
+                    check(gpu_iface_pmu_begin(dsp.handle, event_set), "PMU begin");
+                    if (source) {
+                        fill.arg(2, seed); fill.run(count);
+                        input.ownership(CL_MAP_READ);
+                    } else {
+                        cl_int status;
+                        void * ptr = cl.clEnqueueMapBuffer(cl.queue, input.object, CL_TRUE, CL_MAP_WRITE,
+                            0, bytes, 0, nullptr, nullptr, &status);
+                        check(status, "CPU producer map");
+                        if (ptr != input.memory) throw std::runtime_error("CPU producer map address changed");
+                        auto * words = static_cast<uint32_t *>(ptr);
+                        for (unsigned i = 0; i < count; ++i) words[i] = i * 0x9e3779b9u + seed;
+                        check(cl.clEnqueueUnmapMemObject(cl.queue, input.object, ptr, 0, nullptr, nullptr), "CPU producer unmap");
+                        check(cl.clFinish(cl.queue), "CPU producer finish");
+                    }
+                    check(gpu_iface_pmu_read(dsp.handle, mode, seed, static_cast<const unsigned char *>(input.memory),
+                        int(bytes), static_cast<unsigned char *>(output.memory), int(output.bytes)), "PMU read");
+                    gpu_pmu_report report;
+                    output.ownership(CL_MAP_READ);
+                    output.read(&report);
+                    if (report.version != GPU_PMU_VERSION || report.bytes != bytes || report.mode != mode ||
+                        report.event_set != event_set || report.mismatches ||
+                        std::memcmp(report.events, gpu_pmu_events[event_set], sizeof(report.events)))
+                        throw std::runtime_error("Invalid PMU report or stale GPU/CPU data");
+                    uint32_t cfg = 0, low = 0, high = 0;
+                    for (unsigned i = 0; i < 8; ++i) {
+                        const unsigned event = gpu_pmu_events[event_set][i];
+                        cfg |= ((event >> 8) & 3u) << (i * 2);
+                        if (i < 4) low |= (event & 255u) << (i * 8);
+                        else high |= (event & 255u) << ((i - 4) * 8);
+                    }
+                    if (report.invalid_flags) {
+                        std::cout << "pmu_rejected set=" << event_set << " src=" << source_names[source] << " mode=" << mode_names[mode]
+                                  << " bytes=" << bytes << " index=" << int(iteration) - 3 << " attempt=" << attempt
+                                  << " flags=" << report.invalid_flags << " requested=" << cfg << ',' << low << ',' << high
+                                  << " observed=" << report.configured[0] << ',' << report.configured[1] << ',' << report.configured[2]
+                                  << " final=" << report.final_config[0] << ',' << report.final_config[1] << ',' << report.final_config[2] << '\n';
+                        if (attempt >= 2) throw std::runtime_error("PMU configuration repeatedly changed; measurement unavailable");
+                        continue;
+                    }
+                    if ((report.configured[0] & 65535u) != cfg || report.configured[1] != low || report.configured[2] != high ||
+                        (report.final_config[0] & 65535u) != cfg || report.final_config[1] != low || report.final_config[2] != high)
+                        throw std::runtime_error("Unflagged PMU configuration mismatch");
+                    uint32_t expected[32]{};
+                    if (mode) for (unsigned i = 0; i < count; ++i) expected[i & 31] ^= i * 0x9e3779b9u + seed;
+                    for (unsigned pass = 0; pass < 2; ++pass)
+                        if (std::memcmp(report.checksum[pass], expected, sizeof(expected)))
+                            throw std::runtime_error("PMU cold/warm checksum mismatch");
+                    if (iteration >= 3) for (unsigned phase = 0; phase < 4; ++phase) {
+                        const double us = double(report.ticks[phase]) / 19.2;
+                        // A no-work window can be shorter than one 19.2 MHz tick.
+                        if (!report.cycles[phase]) throw std::runtime_error("Invalid PMU cycle timing");
+                        times[source][phase].push_back(us);
+                        std::cout << "pmu_sample set=" << event_set << " src=" << source_names[source] << " mode=" << mode_names[mode]
+                                  << " bytes=" << bytes << " index=" << iteration - 3 << " phase=" << phase_names[phase]
+                                  << " usec=" << us << " cycles=" << report.cycles[phase];
+                        for (unsigned i = 0; i < 8; ++i) {
+                            counters[source][phase][i].push_back(report.counters[phase][i]);
+                            std::cout << " c" << i << '=' << report.counters[phase][i];
+                        }
+                        std::cout << " mismatches=0\n";
+                    }
+                    break;
+                    }
+                }
+            }
+            for (unsigned source = 0; source < 2; ++source) for (unsigned phase = 0; phase < 4; ++phase) {
+                std::cout << "pmu_summary set=" << event_set << " src=" << source_names[source] << " mode=" << mode_names[mode]
+                          << " bytes=" << bytes << " samples=" << repeats << " phase=" << phase_names[phase]
+                          << " p50_us=" << percentile(times[source][phase], 0.5) << " p95_us=" << percentile(times[source][phase], 0.95);
+                for (unsigned i = 0; i < 8; ++i) std::cout << " c" << i << '=' << percentile(counters[source][phase][i], 0.5);
+                std::cout << " mismatches=0\n";
+            }
+        }
+    }
 }
 
 static void interop(OpenCL & cl, Program & program, bool map_sync, unsigned repeats) {
@@ -456,11 +557,13 @@ int main(int argc, char ** argv) try {
     check(status, "ION/DMA-BUF import");
     if (argc > 1) {
         const std::string mode = argv[1];
-        if (mode != "interop" && mode != "interop-finish" && mode != "dequant") throw std::runtime_error("Unknown mode");
+        if (mode != "interop" && mode != "interop-finish" && mode != "dequant" && mode != "pmu") throw std::runtime_error("Unknown mode");
         const unsigned repeats = argc > 2 ? unsigned(std::stoul(argv[2])) : 31;
         if (!repeats || repeats > 1000) throw std::runtime_error("Invalid repetitions");
         Program program(cl, "exl3_dequant.cl");
-        if (mode == "dequant") {
+        if (mode == "pmu") {
+            pmu_probe(cl, program, repeats, argc > 3 ? unsigned(std::stoul(argv[3])) : 0);
+        } else if (mode == "dequant") {
             std::vector<std::string> fixtures;
             for (int i = 3; i < argc; ++i) fixtures.emplace_back(argv[i]);
             dequant(cl, program, repeats, fixtures);

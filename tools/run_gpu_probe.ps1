@@ -1,8 +1,9 @@
 param(
-    [ValidateSet('interop', 'interop-finish', 'dequant')][string]$Mode = 'interop',
+    [ValidateSet('interop', 'interop-finish', 'dequant', 'pmu')][string]$Mode = 'interop',
     [ValidateRange(1, 1000)][int]$Repetitions = 31,
     [string]$Serial = '483fa196',
-    [switch]$CudaFixtures
+    [switch]$CudaFixtures,
+    [ValidateRange(0, 3)][int]$EventSet = 0
 )
 $ErrorActionPreference = 'Stop'
 $repoPath = Split-Path -Parent $PSScriptRoot
@@ -12,6 +13,7 @@ $devicePath = '/data/local/tmp/xiaomi-hexagon-exl3/gpu-probe'
 $activePids = Invoke-ProjectAdbQuery -Adb $adb -Serial $Serial -Command 'pidof llama-server llama-completion trace_runtime gpu_npu_probe || true'
 if ($activePids) { throw "Concurrent inference/probe process detected ($activePids); run an isolated measurement" }
 $fixtureArgs = ''
+if ($Mode -eq 'pmu') { $fixtureArgs = " $EventSet" }
 if ($CudaFixtures) {
     if ($Mode -ne 'dequant') { throw 'CUDA fixtures apply only to dequant mode' }
     foreach ($fixture in @(@('real-k-proj', 'real-k-proj.bin'), @('real-head', 'real-head.bin'))) {
