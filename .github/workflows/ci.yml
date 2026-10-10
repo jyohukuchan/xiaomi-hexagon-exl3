@@ -27,6 +27,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_homura_kernel_probe.py'
       - name: Test fixed-token baseline validation
         run: python3 -m unittest discover -s tests -p 'test_homura_baseline.py'
+      - name: Test integer-HMX probe validation
+        run: python3 -m unittest discover -s tests -p 'test_int_hmx_probe.py'
       - name: Compile patched graph runtime
         run: |
           git -C third_party/llama.cpp apply ../../patches/llama-exl3.patch

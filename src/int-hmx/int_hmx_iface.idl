@@ -1,0 +1,10 @@
+#include "AEEStdDef.idl"
+#include "remote.idl"
+interface int_hmx_iface : remote_handle64 {
+    AEEResult mat(in uint32 bits, in uint32 batch, in uint32 n, in uint32 k,
+        in uint32 scaled, in uint32 repeats,
+        in sequence<octet> activation, in sequence<octet> weights,
+        in sequence<octet> scales, rout sequence<octet> output,
+        rout uint64 pack_ticks, rout uint64 compute_ticks,
+        rout uint32 arch);
+};

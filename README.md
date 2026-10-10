@@ -23,6 +23,12 @@ that Q4_K_M/Q8_0 run on Hexagon: multi-column matrix work selects HMX FP16,
 while single-column work selects HVX byte-integer dot products. Stored Q4/Q8
 does not imply use of native HMX INT4/INT8 matrix arithmetic.
 
+The [matched-token Homura baseline](docs/benchmarks/2026-10-10-homura-baseline.md)
+and [integer-HMX feasibility decision](docs/validation/integer-hmx-feasibility.md)
+separate real-model speed from raw integer capacity. HexKL integer APIs work on
+this v75 phone, but the current block-scaled prototype is not enabled in inference.
+HexKL is an optional, separately licensed dependency, not MIT-licensed project code.
+
 ## Validated hardware
 
 - Xiaomi 14 Ultra global (`24030PN60G`, `aurora`)
