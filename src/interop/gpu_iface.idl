@@ -1,0 +1,8 @@
+#include "AEEStdDef.idl"
+#include "remote.idl"
+
+interface gpu_iface : remote_handle64 {
+    AEEResult transfer(in uint32 mode, in uint32 seed,
+        in sequence<octet> input, rout sequence<octet> output,
+        rout uint64 cycles, rout uint64 ticks, rout uint32 mismatches);
+};

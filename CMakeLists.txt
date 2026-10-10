@@ -46,4 +46,17 @@ if(EXL3_BUILD_HEXAGON)
         ${HEXAGON_SDK_ROOT}/ipc/fastrpc/remote/ship/android_aarch64/libcdsprpc.so log)
     target_include_directories(exl3_npu_probe PRIVATE ${HEXAGON_SDK_ROOT}/incs
         ${HEXAGON_SDK_ROOT}/incs/stddef ${CMAKE_CURRENT_BINARY_DIR})
+    option(EXL3_BUILD_GPU_PROBE "Build the independent Android GPU/Hexagon interop probe" OFF)
+    if(EXL3_BUILD_GPU_PROBE)
+        add_library(gpu_iface_stub OBJECT ${CMAKE_CURRENT_BINARY_DIR}/gpu_iface_stub.c)
+        target_include_directories(gpu_iface_stub PUBLIC ${HEXAGON_SDK_ROOT}/incs
+            ${HEXAGON_SDK_ROOT}/incs/stddef ${CMAKE_CURRENT_BINARY_DIR})
+        build_idl(src/interop/gpu_iface.idl gpu_iface_stub)
+        add_executable(gpu_npu_probe tools/gpu_npu_probe.cpp)
+        target_link_libraries(gpu_npu_probe PRIVATE exl3_codec gpu_iface_stub
+            ${HEXAGON_SDK_ROOT}/ipc/fastrpc/remote/ship/android_aarch64/libcdsprpc.so dl log vulkan)
+        target_include_directories(gpu_npu_probe PRIVATE ${HEXAGON_SDK_ROOT}/incs
+            ${HEXAGON_SDK_ROOT}/incs/stddef ${CMAKE_CURRENT_BINARY_DIR})
+        target_compile_options(gpu_npu_probe PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
 endif()

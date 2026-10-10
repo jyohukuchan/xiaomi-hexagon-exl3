@@ -5,7 +5,9 @@ Experimental inference engine work for running EXL3-quantized language models on
 The first end-to-end target is [IndexTeam/Index-Translate-2B](https://huggingface.co/IndexTeam/Index-Translate-2B), with request batching and an OpenAI-compatible HTTP API. Most weights will use approximately 4 bpw, while precision-sensitive tensors may use higher precision provided the complete serialized weight payload remains at or below 5.0 average bits per parameter.
 
 > [!IMPORTANT]
-> Native EXL3 inference and the phone-hosted streaming API work with FP16 KV and all 151 packed-weight matrices on Hexagon. Eight simultaneous requests/SSE clients and continuous admission match the short CUDA references. Decoder optimization and the HMX matrix path raise the short-context single-request rate from 0.25 to 1.42 tokens/s, still far below the 15 tokens/s target. Performance, sustained load, and broader/long-context validation remain under development. See [milestones](docs/MILESTONES.md), [latest optimization evidence](docs/validation/byte-sum-optimization.md), and [API setup](docs/API.md).
+> Native EXL3 inference and the phone-hosted streaming API work with FP16 KV and all 151 packed-weight matrices on Hexagon. Eight simultaneous requests/SSE clients and continuous admission match the short CUDA references. Decoder optimization and the HMX matrix path raise the short-context single-request rate from 0.25 to 4.35 tokens/s, still below the 15 tokens/s target. Performance, sustained load, and broader/long-context validation remain under development. See [milestones](docs/MILESTONES.md), [accepted optimization evidence](docs/validation/packed-rounding-optimization.md), and [API setup](docs/API.md).
+
+An independent [GPU/Hexagon interoperability and EXL3 dequantization probe](docs/validation/gpu-npu-interop.md) now passes on Adreno 750 using OpenCL and shared DMA-BUF allocations. This does not switch model execution to the GPU, establish Direct Link access, or demonstrate an inference speedup.
 
 ## Validated hardware
 
